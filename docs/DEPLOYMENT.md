@@ -63,6 +63,105 @@ in every registry that image reaches.
 
 ---
 
+## Deploying to a free host (Vercel + Neon)
+
+The cheapest combination that actually runs this app is **Vercel Hobby** for the
+application and **Neon** for PostgreSQL. Both have real free tiers that do not
+expire and do not ask for a card. Most of the obvious alternatives no longer
+qualify: Railway ended its free tier, Fly.io removed its free allowances, and
+Render's free Postgres is time-limited. Free tiers change — check before relying
+on any of this.
+
+Two properties of this codebase make serverless hosting safe:
+
+- **Rate limiting and idempotency are database-backed**, not in-memory. On a
+  platform that runs many short-lived instances, an in-memory limiter silently
+  degrades to no limiter at all. Here the counters are shared.
+- **Middleware avoids Node built-ins.** The CSP nonce uses `btoa`, not `Buffer`,
+  because middleware runs on the Edge Runtime in production. A throw there takes
+  down every route on the site rather than one.
+
+Vercel Hobby is licensed for non-commercial use. A demonstration qualifies; a
+real service does not, which is academic here for the reasons in
+[`LEGAL_AND_COMPLIANCE.md`](./LEGAL_AND_COMPLIANCE.md).
+
+### 1. Create the database
+
+Sign in at [neon.tech](https://neon.tech), create a project, and copy **both**
+connection strings from the dashboard:
+
+| String | Contains | Used by |
+| --- | --- | --- |
+| Pooled | `-pooler` in the host | The app at runtime, on Vercel |
+| Direct | no `-pooler` | Migrations and seeding, from your machine |
+
+Pooled connections route through PgBouncer, which does not support the session
+state that DDL needs. Running migrations through the pooled string fails in ways
+that read as unrelated errors, so use the direct string for those.
+
+### 2. Migrate and seed, from your machine
+
+```bash
+DATABASE_URL="<direct connection string>" npx prisma migrate deploy
+DATABASE_URL="<direct connection string>" npx prisma db seed
+```
+
+The seed writes three fictional institutions, ten demo locations, and eight demo
+users. Skip it and the app runs but every location list is empty.
+
+### 3. Deploy the app
+
+Import the repository at [vercel.com/new](https://vercel.com/new). The framework
+is detected automatically; `prisma generate` already runs as part of `build`, so
+no build-command override is needed.
+
+Set these environment variables in the Vercel project before the first deploy:
+
+| Variable | Value |
+| --- | --- |
+| `DATABASE_URL` | the **pooled** Neon string |
+| `APP_URL` | your deployment URL, e.g. `https://larimar.vercel.app` |
+| `NODE_ENV` | `production` |
+| `DEMO_MODE` | `true` |
+| `SESSION_SECRET` | generate — see below |
+| `ENCRYPTION_KEY` | generate — must decode to exactly 32 bytes |
+| `PICKUP_CODE_PEPPER` | generate |
+| `PAYMENT_WEBHOOK_SECRET` | generate |
+| `KYC_WEBHOOK_SECRET` | generate |
+
+Generate all five:
+
+```bash
+node -e "['SESSION_SECRET','ENCRYPTION_KEY','PICKUP_CODE_PEPPER','PAYMENT_WEBHOOK_SECRET','KYC_WEBHOOK_SECRET'].forEach(k=>console.log(k+'='+require('node:crypto').randomBytes(32).toString('base64')))"
+```
+
+`APP_URL` must match the deployed origin exactly. It is what the same-origin
+check on state-changing routes compares against, so a mismatch rejects every POST
+with a confusing 403.
+
+### 4. Verify
+
+```bash
+curl -s https://<your-domain>/api/health
+curl -sI https://<your-domain>/ | grep -i content-security-policy
+```
+
+The health endpoint confirms the database is reachable. The CSP header confirms
+middleware is executing — if it is missing, the Edge Runtime threw, and every
+page will be blank despite a green build.
+
+### Keep in mind
+
+- **`DEMO_MODE` must stay `true`.** Setting it to `false` while the mock payment,
+  KYC, and sanctions providers are configured makes the app refuse to boot, by
+  design. That interlock exists so a demo cannot be promoted to something that
+  looks real by flipping one variable.
+- **Rotating `PICKUP_CODE_PEPPER` invalidates every outstanding pickup code**,
+  because codes are stored as single-pepper hashes. Set it once before going
+  live and leave it alone.
+- **Neon suspends an idle free database.** The first request after a pause takes
+  a few seconds while it resumes; it is not a bug.
+
 ## Configuration
 
 Every variable is validated by Zod at import in `src/server/env.ts`. A missing or

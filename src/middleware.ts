@@ -26,7 +26,10 @@ import { NextResponse, type NextRequest } from 'next/server';
  * credential for cash, so it keeps the strict policy.
  */
 export function middleware(request: NextRequest): NextResponse {
-  const nonce = Buffer.from(crypto.randomUUID()).toString('base64');
+  // btoa, not Buffer: middleware runs on the Edge Runtime in production, where
+  // Node built-ins are not guaranteed. A throw here fails every request on the
+  // site, not one route, so this stays on APIs both runtimes have.
+  const nonce = btoa(crypto.randomUUID());
   const isDev = process.env.NODE_ENV === 'development';
 
   const csp = [
