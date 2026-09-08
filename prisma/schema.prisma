@@ -1,0 +1,1311 @@
+// Larimar — PostgreSQL schema
+//
+// CONVENTIONS THAT MATTER
+//  * Every monetary value is a BigInt count of MINOR UNITS plus an ISO-4217 code.
+//    RD$20,000.00 -> 2000000n / "DOP".  Never a float. Never a bare number.
+//  * Every FX rate is a BigInt scaled by 1e8 (RATE_SCALE).
+//  * Nothing financial is ever UPDATEd in place: ledger corrections are reversing
+//    entries, status changes are appended events.
+//  * `deletedAt` marks soft deletion; queries in the app layer filter on it.
+//  * Table names are snake_case via @@map so the SQL reads like SQL.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// ENUMS
+// ---------------------------------------------------------------------------
+
+enum UserStatus {
+  PENDING_VERIFICATION
+  ACTIVE
+  SUSPENDED
+  CLOSED
+}
+
+enum RoleName {
+  CUSTOMER
+  PICKUP_AGENT
+  PICKUP_MANAGER
+  COMPLIANCE_ANALYST
+  SUPPORT_AGENT
+  FINANCE_ADMIN
+  SYSTEM_ADMIN
+}
+
+/// The complete transaction lifecycle. Transitions are enforced in
+/// src/lib/domain/transaction-state.ts — never write this column directly.
+enum TransactionStatus {
+  CREATED
+  CUSTOMER_DETAILS_REQUIRED
+  KYC_REQUIRED
+  KYC_PENDING
+  KYC_APPROVED
+  KYC_REJECTED
+  PAYMENT_PENDING
+  PAYMENT_AUTHORIZED
+  PAYMENT_FAILED
+  COMPLIANCE_REVIEW
+  READY_FOR_PICKUP
+  PARTIALLY_PICKED_UP
+  PICKED_UP
+  EXPIRED
+  CANCELLED
+  REFUNDED
+  DISPUTED
+}
+
+enum KycStatus {
+  NOT_STARTED
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+enum KycLevel {
+  NONE
+  BASIC
+  ENHANCED
+}
+
+enum IdentityDocumentType {
+  PASSPORT
+  NATIONAL_ID
+  DRIVERS_LICENSE
+  RESIDENCE_PERMIT
+}
+
+enum PaymentStatus {
+  CREATED
+  REQUIRES_ACTION
+  AUTHORIZED
+  CAPTURED
+  FAILED
+  CANCELLED
+  REFUNDED
+  PARTIALLY_REFUNDED
+  CHARGEBACK
+}
+
+enum PaymentMethodType {
+  CARD_DEBIT
+  CARD_CREDIT
+  APPLE_PAY
+  GOOGLE_PAY
+  BANK_TRANSFER
+}
+
+enum LedgerAccountType {
+  ASSET
+  LIABILITY
+  REVENUE
+  EXPENSE
+  EQUITY
+}
+
+enum LedgerDirection {
+  DEBIT
+  CREDIT
+}
+
+enum LedgerEventType {
+  CUSTOMER_PAYMENT
+  PLATFORM_FEE
+  PROCESSING_FEE
+  FX_CONVERSION
+  PAYOUT_LIABILITY
+  BANK_SETTLEMENT
+  REFUND
+  CHARGEBACK
+  ADJUSTMENT
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum ComplianceCaseType {
+  KYC_REVIEW
+  SANCTIONS_HIT
+  PEP_MATCH
+  AML_MONITORING
+  SOURCE_OF_FUNDS
+  MANUAL_REVIEW
+  FRAUD_REVIEW
+}
+
+enum ComplianceCaseStatus {
+  OPEN
+  IN_REVIEW
+  ESCALATED
+  APPROVED
+  REJECTED
+  CLOSED
+}
+
+enum FraudAlertType {
+  CODE_BRUTE_FORCE
+  VELOCITY_BREACH
+  DEVICE_SHARING
+  GEO_MISMATCH
+  DUPLICATE_TRANSACTION
+  CHARGEBACK_PATTERN
+  AGENT_ANOMALY
+  ACCOUNT_TAKEOVER
+  LIMIT_BREACH
+}
+
+enum AlertStatus {
+  OPEN
+  INVESTIGATING
+  CONFIRMED
+  DISMISSED
+}
+
+enum PickupCodeStatus {
+  ACTIVE
+  LOCKED
+  REDEEMED
+  EXPIRED
+  CANCELLED
+}
+
+enum PickupEventType {
+  VERIFICATION_ATTEMPT
+  VERIFICATION_SUCCESS
+  VERIFICATION_FAILED
+  IDENTITY_CONFIRMED
+  PAYOUT_APPROVED
+  PAYOUT_REJECTED
+  PAYOUT_ESCALATED
+  PAYOUT_COMPLETED
+  PAYOUT_FAILED
+  CODE_LOCKED
+}
+
+enum LocationStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  TEMPORARILY_CLOSED
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+  WHATSAPP
+  PUSH
+}
+
+enum NotificationStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  FAILED
+}
+
+enum TicketStatus {
+  OPEN
+  PENDING_CUSTOMER
+  RESOLVED
+  CLOSED
+}
+
+enum RefundStatus {
+  REQUESTED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum ChargebackStatus {
+  RECEIVED
+  UNDER_REVIEW
+  EVIDENCE_SUBMITTED
+  WON
+  LOST
+}
+
+enum WebhookStatus {
+  RECEIVED
+  PROCESSED
+  FAILED
+  IGNORED
+  INVALID_SIGNATURE
+}
+
+enum Locale {
+  EN
+  ES
+}
+
+// ---------------------------------------------------------------------------
+// IDENTITY & ACCESS
+// ---------------------------------------------------------------------------
+
+model User {
+  id                String     @id @default(uuid()) @db.Uuid
+  email             String     @unique
+  emailVerifiedAt   DateTime?  @map("email_verified_at")
+  /// scrypt$N$r$p$salt$hash — parameters embedded so they can be upgraded in place.
+  passwordHash      String     @map("password_hash")
+  passwordUpdatedAt DateTime   @default(now()) @map("password_updated_at")
+  status            UserStatus @default(PENDING_VERIFICATION)
+  locale            Locale     @default(EN)
+
+  mfaEnabled        Boolean    @default(false) @map("mfa_enabled")
+  /// Encrypted (AES-256-GCM) TOTP secret. Never stored in plaintext.
+  mfaSecretEnc      String?    @map("mfa_secret_enc")
+
+  failedLoginCount  Int        @default(0) @map("failed_login_count")
+  lockedUntil       DateTime?  @map("locked_until")
+  lastLoginAt       DateTime?  @map("last_login_at")
+  lastLoginIp       String?    @map("last_login_ip")
+
+  /// Staff scoping: an agent/manager belongs to an institution and (optionally) a location.
+  institutionId     String?    @map("institution_id") @db.Uuid
+  institution       PickupInstitution? @relation(fields: [institutionId], references: [id], onDelete: SetNull)
+
+  createdAt         DateTime   @default(now()) @map("created_at")
+  updatedAt         DateTime   @updatedAt @map("updated_at")
+  deletedAt         DateTime?  @map("deleted_at")
+
+  profile              UserProfile?
+  roles                UserRole[]
+  sessions             Session[]
+  devices              Device[]
+  recoveryCodes        MfaRecoveryCode[]
+  passwordResets       PasswordResetToken[]
+  identityVerifications IdentityVerification[]
+  transactions         Transaction[]
+  notifications        Notification[]
+  supportTickets       SupportTicket[]           @relation("TicketCustomer")
+  assignedTickets      SupportTicket[]           @relation("TicketAssignee")
+  auditLogs            AuditLog[]                @relation("AuditActor")
+  riskEvents           RiskEvent[]
+  fraudAlerts          FraudAlert[]              @relation("FraudAlertSubject")
+  complianceCases      ComplianceCase[]          @relation("ComplianceSubject")
+  assignedCases        ComplianceCase[]          @relation("ComplianceAssignee")
+  agentLocations       AgentLocationAssignment[]
+  pickupEvents         PickupEvent[]
+  idempotencyKeys      IdempotencyKey[]
+
+  @@index([status])
+  @@index([institutionId])
+  @@index([createdAt])
+  @@map("users")
+}
+
+model UserProfile {
+  id             String    @id @default(uuid()) @db.Uuid
+  userId         String    @unique @map("user_id") @db.Uuid
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  firstName      String    @map("first_name")
+  lastName       String    @map("last_name")
+  dateOfBirth    DateTime? @map("date_of_birth") @db.Date
+  phoneE164      String?   @map("phone_e164")
+  phoneVerifiedAt DateTime? @map("phone_verified_at")
+
+  /// ISO-3166-1 alpha-2 of residence, and of the current trip.
+  residenceCountry String? @map("residence_country") @db.Char(2)
+  travelCountry    String? @map("travel_country") @db.Char(2)
+
+  addressLine1   String?   @map("address_line1")
+  addressLine2   String?   @map("address_line2")
+  city           String?
+  region         String?
+  postalCode     String?   @map("postal_code")
+
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  @@index([phoneE164])
+  @@map("user_profiles")
+}
+
+model Role {
+  id          String     @id @default(uuid()) @db.Uuid
+  name        RoleName   @unique
+  description String
+  createdAt   DateTime   @default(now()) @map("created_at")
+
+  users       UserRole[]
+  permissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String   @id @default(uuid()) @db.Uuid
+  /// Dotted resource:action key, e.g. "transaction.create", "pickup.redeem".
+  key         String   @unique
+  description String
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  roles       RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String     @map("role_id") @db.Uuid
+  permissionId String     @map("permission_id") @db.Uuid
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  createdAt    DateTime   @default(now()) @map("created_at")
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  userId    String   @map("user_id") @db.Uuid
+  roleId    String   @map("role_id") @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  grantedAt DateTime @default(now()) @map("granted_at")
+  grantedBy String?  @map("granted_by") @db.Uuid
+
+  @@id([userId, roleId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+model Session {
+  id             String    @id @default(uuid()) @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// sha256 of the opaque bearer token. The plaintext exists only in the cookie.
+  tokenHash      String    @unique @map("token_hash")
+  /// Rotation chain: the session this one replaced.
+  previousId     String?   @map("previous_id") @db.Uuid
+
+  mfaSatisfied   Boolean   @default(false) @map("mfa_satisfied")
+  ipAddress      String?   @map("ip_address")
+  userAgent      String?   @map("user_agent")
+  deviceId       String?   @map("device_id") @db.Uuid
+  device         Device?   @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  expiresAt      DateTime  @map("expires_at")
+  idleExpiresAt  DateTime  @map("idle_expires_at")
+  revokedAt      DateTime? @map("revoked_at")
+  revokedReason  String?   @map("revoked_reason")
+  lastSeenAt     DateTime  @default(now()) @map("last_seen_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model Device {
+  id             String    @id @default(uuid()) @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Opaque client-generated fingerprint. PLACEHOLDER: production should use a
+  /// dedicated device-intelligence vendor; this value is trivially spoofable.
+  fingerprint    String
+  label          String?
+  firstSeenIp    String?   @map("first_seen_ip")
+  lastSeenIp     String?   @map("last_seen_ip")
+  lastSeenAt     DateTime  @default(now()) @map("last_seen_at")
+  trusted        Boolean   @default(false)
+  blocked        Boolean   @default(false)
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  sessions       Session[]
+  transactions   Transaction[]
+
+  @@unique([userId, fingerprint])
+  @@index([fingerprint])
+  @@map("devices")
+}
+
+model MfaRecoveryCode {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash  String    @map("code_hash")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@unique([userId, codeHash])
+  @@map("mfa_recovery_codes")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  requestIp String?   @map("request_ip")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+// ---------------------------------------------------------------------------
+// KYC / IDENTITY VERIFICATION
+// ---------------------------------------------------------------------------
+
+model IdentityVerification {
+  id             String               @id @default(uuid()) @db.Uuid
+  userId         String               @map("user_id") @db.Uuid
+  user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  provider       String
+  providerRef    String?              @map("provider_ref")
+  status         KycStatus            @default(NOT_STARTED)
+  level          KycLevel             @default(NONE)
+
+  documentType   IdentityDocumentType? @map("document_type")
+  /// Last 4 of the document number only. The full number is never stored.
+  documentLast4  String?              @map("document_last4")
+  documentCountry String?             @map("document_country") @db.Char(2)
+  documentExpiry DateTime?            @map("document_expiry") @db.Date
+
+  sanctionsChecked Boolean            @default(false) @map("sanctions_checked")
+  sanctionsHit     Boolean            @default(false) @map("sanctions_hit")
+  pepHit           Boolean            @default(false) @map("pep_hit")
+
+  rejectionReason String?             @map("rejection_reason")
+  reviewedBy      String?             @map("reviewed_by") @db.Uuid
+  submittedAt     DateTime?           @map("submitted_at")
+  decidedAt       DateTime?           @map("decided_at")
+  expiresAt       DateTime?           @map("expires_at")
+
+  rawResult       Json?               @map("raw_result")
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt @map("updated_at")
+
+  @@index([userId, status])
+  @@index([providerRef])
+  @@map("identity_verifications")
+}
+
+// ---------------------------------------------------------------------------
+// PRICING: FEE SCHEDULES, EXCHANGE RATES, QUOTES
+// ---------------------------------------------------------------------------
+
+/// Versioned pricing. A transaction points at the exact version that priced it, so
+/// any historical receipt can be recomputed and defended years later.
+model FeeSchedule {
+  id                  String   @id @default(uuid()) @db.Uuid
+  key                 String
+  version             Int
+  countryCode         String   @map("country_code") @db.Char(2)
+
+  platformFeeBps      Int      @map("platform_fee_bps")
+  platformFeeMinMinor BigInt   @map("platform_fee_min_minor")
+  platformFeeMaxMinor BigInt?  @map("platform_fee_max_minor")
+  fxSpreadBps         Int      @map("fx_spread_bps")
+  processingFeeBps    Int      @map("processing_fee_bps")
+  processingFeeFixedMinor BigInt @map("processing_fee_fixed_minor")
+  expeditedFeeMinor   BigInt   @default(0) @map("expedited_fee_minor")
+  feeCurrency         String   @map("fee_currency") @db.Char(3)
+
+  active              Boolean  @default(false)
+  effectiveFrom       DateTime @default(now()) @map("effective_from")
+  effectiveTo         DateTime? @map("effective_to")
+  createdBy           String?  @map("created_by") @db.Uuid
+  createdAt           DateTime @default(now()) @map("created_at")
+
+  quotes              Quote[]
+
+  @@unique([key, version])
+  @@index([countryCode, active])
+  @@map("fee_schedules")
+}
+
+/// Immutable snapshot of a rate observation. Never updated.
+model ExchangeRate {
+  id            String   @id @default(uuid()) @db.Uuid
+  baseCurrency  String   @map("base_currency") @db.Char(3)
+  quoteCurrency String   @map("quote_currency") @db.Char(3)
+
+  /// Mid-market rate scaled by 1e8. 1 USD = 60.25 DOP -> 6025000000
+  midRate       BigInt   @map("mid_rate")
+  /// Spread applied to produce the customer rate, in basis points.
+  spreadBps     Int      @map("spread_bps")
+  /// midRate adjusted by spreadBps — the rate actually quoted to a customer.
+  effectiveRate BigInt   @map("effective_rate")
+
+  source        String
+  fetchedAt     DateTime @map("fetched_at")
+  expiresAt     DateTime @map("expires_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  quotes        Quote[]
+
+  @@index([baseCurrency, quoteCurrency, fetchedAt])
+  @@map("exchange_rates")
+}
+
+/// A frozen price. Everything the customer was shown, preserved.
+model Quote {
+  id                  String   @id @default(uuid()) @db.Uuid
+
+  payoutCurrency      String   @map("payout_currency") @db.Char(3)
+  payoutAmountMinor   BigInt   @map("payout_amount_minor")
+  fundingCurrency     String   @map("funding_currency") @db.Char(3)
+  /// Pre-fee funding amount required to deliver payoutAmountMinor.
+  principalMinor      BigInt   @map("principal_minor")
+  platformFeeMinor    BigInt   @map("platform_fee_minor")
+  processingFeeMinor  BigInt   @map("processing_fee_minor")
+  expeditedFeeMinor   BigInt   @default(0) @map("expedited_fee_minor")
+  /// principal + all fees — what the card is charged.
+  totalChargedMinor   BigInt   @map("total_charged_minor")
+
+  midRate             BigInt   @map("mid_rate")
+  effectiveRate       BigInt   @map("effective_rate")
+  fxSpreadBps         Int      @map("fx_spread_bps")
+
+  exchangeRateId      String   @map("exchange_rate_id") @db.Uuid
+  exchangeRate        ExchangeRate @relation(fields: [exchangeRateId], references: [id])
+  feeScheduleId       String   @map("fee_schedule_id") @db.Uuid
+  feeSchedule         FeeSchedule  @relation(fields: [feeScheduleId], references: [id])
+
+  countryCode         String   @map("country_code") @db.Char(2)
+  expiresAt           DateTime @map("expires_at")
+  consumedAt          DateTime? @map("consumed_at")
+  createdAt           DateTime @default(now()) @map("created_at")
+
+  transaction         Transaction?
+
+  @@index([expiresAt])
+  @@map("quotes")
+}
+
+// ---------------------------------------------------------------------------
+// TRANSACTIONS
+// ---------------------------------------------------------------------------
+
+model Transaction {
+  id                 String            @id @default(uuid()) @db.Uuid
+  /// Human-facing reference, e.g. LRM-7F3K2Q8M. Not a pickup code, not sequential.
+  reference          String            @unique
+
+  userId             String            @map("user_id") @db.Uuid
+  user               User              @relation(fields: [userId], references: [id])
+
+  status             TransactionStatus @default(CREATED)
+  countryCode        String            @map("country_code") @db.Char(2)
+
+  quoteId            String            @unique @map("quote_id") @db.Uuid
+  quote              Quote             @relation(fields: [quoteId], references: [id])
+
+  // Denormalised from the quote so a transaction row is self-describing in reports.
+  payoutCurrency     String            @map("payout_currency") @db.Char(3)
+  payoutAmountMinor  BigInt            @map("payout_amount_minor")
+  paidOutMinor       BigInt            @default(0) @map("paid_out_minor")
+  fundingCurrency    String            @map("funding_currency") @db.Char(3)
+  totalChargedMinor  BigInt            @map("total_charged_minor")
+  platformFeeMinor   BigInt            @map("platform_fee_minor")
+  processingFeeMinor BigInt            @map("processing_fee_minor")
+  effectiveRate      BigInt            @map("effective_rate")
+
+  riskScore          Int               @default(0) @map("risk_score")
+  riskLevel          RiskLevel         @default(LOW) @map("risk_level")
+
+  /// Preferred pickup location. Redemption may occur at any active location of the
+  /// same institution unless the country config pins it.
+  pickupLocationId   String?           @map("pickup_location_id") @db.Uuid
+  pickupLocation     PickupLocation?   @relation(fields: [pickupLocationId], references: [id], onDelete: SetNull)
+
+  deviceId           String?           @map("device_id") @db.Uuid
+  device             Device?           @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  createdIp          String?           @map("created_ip")
+  createdCountry     String?           @map("created_country") @db.Char(2)
+
+  expiresAt          DateTime?         @map("expires_at")
+  fundedAt           DateTime?         @map("funded_at")
+  readyAt            DateTime?         @map("ready_at")
+  completedAt        DateTime?         @map("completed_at")
+  cancelledAt        DateTime?         @map("cancelled_at")
+  cancelReason       String?           @map("cancel_reason")
+
+  createdAt          DateTime          @default(now()) @map("created_at")
+  updatedAt          DateTime          @updatedAt @map("updated_at")
+  deletedAt          DateTime?         @map("deleted_at")
+
+  events             TransactionEvent[]
+  payments           Payment[]
+  pickupCode         PickupCode?
+  pickupEvents       PickupEvent[]
+  ledgerTransactions LedgerTransaction[]
+  complianceCases    ComplianceCase[]
+  riskEvents         RiskEvent[]
+  fraudAlerts        FraudAlert[]
+  refunds            Refund[]
+  chargebacks        Chargeback[]
+  notifications      Notification[]
+  supportTickets     SupportTicket[]
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@index([riskLevel, status])
+  @@index([pickupLocationId, status])
+  @@index([createdAt])
+  @@map("transactions")
+}
+
+/// Append-only. The transactions.status column is a materialised convenience;
+/// this stream is the source of truth for how a transaction reached its state.
+model TransactionEvent {
+  id            String             @id @default(uuid()) @db.Uuid
+  transactionId String             @map("transaction_id") @db.Uuid
+  transaction   Transaction        @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+
+  fromStatus    TransactionStatus?  @map("from_status")
+  toStatus      TransactionStatus   @map("to_status")
+  reason        String?
+  /// "system" | "customer" | "agent" | "compliance" | "admin" | "webhook"
+  actorType     String              @map("actor_type")
+  actorId       String?             @map("actor_id") @db.Uuid
+  metadata      Json?
+  createdAt     DateTime            @default(now()) @map("created_at")
+
+  @@index([transactionId, createdAt])
+  @@index([toStatus, createdAt])
+  @@map("transaction_events")
+}
+
+// ---------------------------------------------------------------------------
+// PAYMENTS
+// ---------------------------------------------------------------------------
+
+model Payment {
+  id               String            @id @default(uuid()) @db.Uuid
+  transactionId    String            @map("transaction_id") @db.Uuid
+  transaction      Transaction       @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+
+  provider         String
+  providerRef      String            @map("provider_ref")
+  status           PaymentStatus     @default(CREATED)
+
+  amountMinor      BigInt            @map("amount_minor")
+  currency         String            @db.Char(3)
+  capturedMinor    BigInt            @default(0) @map("captured_minor")
+  refundedMinor    BigInt            @default(0) @map("refunded_minor")
+
+  methodType       PaymentMethodType? @map("method_type")
+  /// Tokenised reference from the provider. NEVER a PAN.
+  paymentToken     String?           @map("payment_token")
+  cardBrand        String?           @map("card_brand")
+  cardLast4        String?           @map("card_last4")
+  cardBin          String?           @map("card_bin")
+  cardCountry      String?           @map("card_country") @db.Char(2)
+  threeDsResult    String?           @map("three_ds_result")
+
+  failureCode      String?           @map("failure_code")
+  failureMessage   String?           @map("failure_message")
+
+  authorizedAt     DateTime?         @map("authorized_at")
+  capturedAt       DateTime?         @map("captured_at")
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+
+  attempts         PaymentAttempt[]
+  refunds          Refund[]
+  chargebacks      Chargeback[]
+
+  @@unique([provider, providerRef])
+  @@index([transactionId])
+  @@index([status, createdAt])
+  @@index([cardBin])
+  @@map("payments")
+}
+
+model PaymentAttempt {
+  id             String        @id @default(uuid()) @db.Uuid
+  paymentId      String        @map("payment_id") @db.Uuid
+  payment        Payment       @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  attemptNumber  Int           @map("attempt_number")
+  status         PaymentStatus
+  operation      String
+  failureCode    String?       @map("failure_code")
+  failureMessage String?       @map("failure_message")
+  providerRaw    Json?         @map("provider_raw")
+  ipAddress      String?       @map("ip_address")
+  createdAt      DateTime      @default(now()) @map("created_at")
+
+  @@unique([paymentId, attemptNumber])
+  @@index([paymentId])
+  @@map("payment_attempts")
+}
+
+model Refund {
+  id            String       @id @default(uuid()) @db.Uuid
+  transactionId String       @map("transaction_id") @db.Uuid
+  transaction   Transaction  @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  paymentId     String       @map("payment_id") @db.Uuid
+  payment       Payment      @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  amountMinor   BigInt       @map("amount_minor")
+  currency      String       @db.Char(3)
+  reason        String
+  status        RefundStatus @default(REQUESTED)
+  providerRef   String?      @map("provider_ref")
+  requestedBy   String?      @map("requested_by") @db.Uuid
+  completedAt   DateTime?    @map("completed_at")
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+
+  @@index([transactionId])
+  @@index([status])
+  @@map("refunds")
+}
+
+model Chargeback {
+  id             String           @id @default(uuid()) @db.Uuid
+  transactionId  String           @map("transaction_id") @db.Uuid
+  transaction    Transaction      @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  paymentId      String           @map("payment_id") @db.Uuid
+  payment        Payment          @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  amountMinor    BigInt           @map("amount_minor")
+  currency       String           @db.Char(3)
+  reasonCode     String           @map("reason_code")
+  networkCaseRef String?          @map("network_case_ref")
+  status         ChargebackStatus @default(RECEIVED)
+  evidenceDueAt  DateTime?        @map("evidence_due_at")
+  resolvedAt     DateTime?        @map("resolved_at")
+  createdAt      DateTime         @default(now()) @map("created_at")
+  updatedAt      DateTime         @updatedAt @map("updated_at")
+
+  @@index([transactionId])
+  @@index([status])
+  @@map("chargebacks")
+}
+
+// ---------------------------------------------------------------------------
+// PICKUP NETWORK
+// ---------------------------------------------------------------------------
+
+model PickupInstitution {
+  id              String           @id @default(uuid()) @db.Uuid
+  /// Stable external identifier used by the partner API.
+  code            String           @unique
+  name            String
+  legalName       String?          @map("legal_name")
+  countryCode     String           @map("country_code") @db.Char(2)
+  contactEmail    String?          @map("contact_email")
+  contactPhone    String?          @map("contact_phone")
+
+  /// TRUE for every institution in this build. Gates the mandatory
+  /// "DEMO LOCATION — NOT A REAL PARTNER" banner. There are no real partners.
+  isDemo          Boolean          @default(true) @map("is_demo")
+  active          Boolean          @default(true)
+
+  /// HMAC secret for partner API request signing (encrypted at rest).
+  apiKeyId        String?          @unique @map("api_key_id")
+  apiSecretEnc    String?          @map("api_secret_enc")
+
+  settlementAccountId String?      @map("settlement_account_id") @db.Uuid
+
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+  deletedAt       DateTime?        @map("deleted_at")
+
+  locations       PickupLocation[]
+  staff           User[]
+  pickupEvents    PickupEvent[]
+
+  @@index([countryCode, active])
+  @@map("pickup_institutions")
+}
+
+model PickupLocation {
+  id                String            @id @default(uuid()) @db.Uuid
+  institutionId     String            @map("institution_id") @db.Uuid
+  institution       PickupInstitution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+
+  code              String            @unique
+  branchName        String            @map("branch_name")
+  addressLine1      String            @map("address_line1")
+  addressLine2      String?           @map("address_line2")
+  city              String
+  province          String
+  countryCode       String            @map("country_code") @db.Char(2)
+  postalCode        String?           @map("postal_code")
+
+  latitude          Float
+  longitude         Float
+
+  /// [{ day: 0-6, open: "08:30", close: "16:00", closed?: true }]
+  openingHours      Json              @map("opening_hours")
+  timezone          String            @default("America/Santo_Domingo")
+
+  pickupAvailable   Boolean           @default(true) @map("pickup_available")
+  /// ISO-4217 codes this window can pay out in.
+  supportedCurrencies String[]        @map("supported_currencies")
+  maxPayoutMinor    BigInt            @map("max_payout_minor")
+  dailyCapacityMinor BigInt           @map("daily_capacity_minor")
+  /// Rolling counter reset by a scheduled job. Advisory, not an accounting record.
+  dailyUsedMinor    BigInt            @default(0) @map("daily_used_minor")
+  capacityResetAt   DateTime?         @map("capacity_reset_at")
+
+  status            LocationStatus    @default(ACTIVE)
+  /// 0 = lowest risk. Feeds the risk engine.
+  riskTier          Int               @default(0) @map("risk_tier")
+  contactPhone      String?           @map("contact_phone")
+  notes             String?
+
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
+  deletedAt         DateTime?         @map("deleted_at")
+
+  transactions      Transaction[]
+  pickupEvents      PickupEvent[]
+  agentAssignments  AgentLocationAssignment[]
+
+  @@index([countryCode, city])
+  @@index([institutionId, status])
+  @@index([latitude, longitude])
+  @@map("pickup_locations")
+}
+
+/// An agent may only act on transactions at locations assigned here.
+model AgentLocationAssignment {
+  id         String         @id @default(uuid()) @db.Uuid
+  userId     String         @map("user_id") @db.Uuid
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  locationId String         @map("location_id") @db.Uuid
+  location   PickupLocation @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  active     Boolean        @default(true)
+  assignedAt DateTime       @default(now()) @map("assigned_at")
+  assignedBy String?        @map("assigned_by") @db.Uuid
+
+  @@unique([userId, locationId])
+  @@index([locationId, active])
+  @@map("agent_location_assignments")
+}
+
+model PickupCode {
+  id             String           @id @default(uuid()) @db.Uuid
+  transactionId  String           @unique @map("transaction_id") @db.Uuid
+  transaction    Transaction      @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+
+  /// sha256(pepper || plaintext). The plaintext is returned once, to the owner, and
+  /// is never persisted anywhere.
+  codeHash       String           @unique @map("code_hash")
+  /// Non-secret display prefix ("DR") for support and routing. Not a secret.
+  prefix         String           @db.VarChar(4)
+  /// sha256 of the 128-bit QR-only secret — the credential's second factor.
+  secretHash     String           @map("secret_hash")
+
+  status         PickupCodeStatus @default(ACTIVE)
+  attemptCount   Int              @default(0) @map("attempt_count")
+  maxAttempts    Int              @default(5) @map("max_attempts")
+  lockedAt       DateTime?        @map("locked_at")
+
+  expiresAt      DateTime         @map("expires_at")
+  redeemedAt     DateTime?        @map("redeemed_at")
+  redeemedBy     String?          @map("redeemed_by") @db.Uuid
+  redeemedAtLocationId String?    @map("redeemed_at_location_id") @db.Uuid
+
+  createdAt      DateTime         @default(now()) @map("created_at")
+  updatedAt      DateTime         @updatedAt @map("updated_at")
+
+  @@index([status, expiresAt])
+  @@map("pickup_codes")
+}
+
+/// Append-only record of everything that happened at a payout window.
+model PickupEvent {
+  id             String            @id @default(uuid()) @db.Uuid
+  transactionId  String?           @map("transaction_id") @db.Uuid
+  transaction    Transaction?      @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+
+  eventType      PickupEventType   @map("event_type")
+
+  agentId        String?           @map("agent_id") @db.Uuid
+  agent          User?             @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  institutionId  String?           @map("institution_id") @db.Uuid
+  institution    PickupInstitution? @relation(fields: [institutionId], references: [id], onDelete: SetNull)
+  locationId     String?           @map("location_id") @db.Uuid
+  location       PickupLocation?   @relation(fields: [locationId], references: [id], onDelete: SetNull)
+
+  amountMinor    BigInt?           @map("amount_minor")
+  currency       String?           @db.Char(3)
+
+  /// Which document the agent inspected, and the last 4 only.
+  documentType   IdentityDocumentType? @map("document_type")
+  documentLast4  String?           @map("document_last4")
+  verificationResult String?       @map("verification_result")
+
+  /// Populated on failed attempts so brute force is attributable.
+  attemptedCodeHash String?        @map("attempted_code_hash")
+  ipAddress      String?           @map("ip_address")
+  userAgent      String?           @map("user_agent")
+  reason         String?
+  metadata       Json?
+  createdAt      DateTime          @default(now()) @map("created_at")
+
+  @@index([transactionId, createdAt])
+  @@index([agentId, createdAt])
+  @@index([locationId, createdAt])
+  @@index([eventType, createdAt])
+  @@map("pickup_events")
+}
+
+// ---------------------------------------------------------------------------
+// LEDGER (double entry)
+// ---------------------------------------------------------------------------
+
+model LedgerAccount {
+  id            String            @id @default(uuid()) @db.Uuid
+  code          String            @unique
+  name          String
+  type          LedgerAccountType
+  currency      String            @db.Char(3)
+  /// DEBIT for ASSET/EXPENSE, CREDIT for LIABILITY/REVENUE/EQUITY.
+  normalBalance LedgerDirection   @map("normal_balance")
+  /// Held on behalf of customers/partners rather than owned by the platform.
+  isCustodial   Boolean           @default(false) @map("is_custodial")
+  active        Boolean           @default(true)
+  createdAt     DateTime          @default(now()) @map("created_at")
+
+  entries       LedgerEntry[]
+
+  @@index([type, currency])
+  @@map("ledger_accounts")
+}
+
+/// A balanced set of entries. Enforced to sum to zero before insert.
+model LedgerTransaction {
+  id            String          @id @default(uuid()) @db.Uuid
+  reference     String          @unique
+  eventType     LedgerEventType @map("event_type")
+  currency      String          @db.Char(3)
+  description   String
+
+  transactionId String?         @map("transaction_id") @db.Uuid
+  transaction   Transaction?    @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+
+  /// Reversal chain. Corrections are new reversing transactions, never edits.
+  reversesId    String?         @unique @map("reverses_id") @db.Uuid
+  reverses      LedgerTransaction? @relation("LedgerReversal", fields: [reversesId], references: [id])
+  reversedBy    LedgerTransaction? @relation("LedgerReversal")
+
+  /// Idempotency guard: one posting per (business event, transaction).
+  postingKey    String          @unique @map("posting_key")
+
+  occurredAt    DateTime        @map("occurred_at")
+  createdAt     DateTime        @default(now()) @map("created_at")
+
+  entries       LedgerEntry[]
+
+  @@index([transactionId])
+  @@index([eventType, occurredAt])
+  @@map("ledger_transactions")
+}
+
+model LedgerEntry {
+  id                  String            @id @default(uuid()) @db.Uuid
+  ledgerTransactionId String            @map("ledger_transaction_id") @db.Uuid
+  ledgerTransaction   LedgerTransaction @relation(fields: [ledgerTransactionId], references: [id], onDelete: Cascade)
+
+  accountId           String            @map("account_id") @db.Uuid
+  account             LedgerAccount     @relation(fields: [accountId], references: [id])
+
+  direction           LedgerDirection
+  /// Always positive. Direction carries the sign.
+  amountMinor         BigInt            @map("amount_minor")
+  currency            String            @db.Char(3)
+  memo                String?
+  createdAt           DateTime          @default(now()) @map("created_at")
+
+  @@index([accountId, createdAt])
+  @@index([ledgerTransactionId])
+  @@map("ledger_entries")
+}
+
+// ---------------------------------------------------------------------------
+// RISK & COMPLIANCE
+// ---------------------------------------------------------------------------
+
+model ComplianceCase {
+  id            String               @id @default(uuid()) @db.Uuid
+  caseNumber    String               @unique @map("case_number")
+  type          ComplianceCaseType
+  status        ComplianceCaseStatus @default(OPEN)
+  priority      RiskLevel            @default(MEDIUM)
+
+  subjectUserId String?              @map("subject_user_id") @db.Uuid
+  subjectUser   User?                @relation("ComplianceSubject", fields: [subjectUserId], references: [id], onDelete: SetNull)
+  transactionId String?              @map("transaction_id") @db.Uuid
+  transaction   Transaction?         @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+
+  assigneeId    String?              @map("assignee_id") @db.Uuid
+  assignee      User?                @relation("ComplianceAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+
+  summary       String
+  findings      String?
+  resolution    String?
+  /// Records that a suspicious-activity report would be filed here. Filing itself
+  /// requires a licensed entity and is out of scope.
+  sarFlagged    Boolean              @default(false) @map("sar_flagged")
+
+  openedAt      DateTime             @default(now()) @map("opened_at")
+  decidedAt     DateTime?            @map("decided_at")
+  decidedBy     String?              @map("decided_by") @db.Uuid
+  createdAt     DateTime             @default(now()) @map("created_at")
+  updatedAt     DateTime             @updatedAt @map("updated_at")
+
+  @@index([status, priority])
+  @@index([transactionId])
+  @@index([subjectUserId])
+  @@map("compliance_cases")
+}
+
+model RiskEvent {
+  id            String       @id @default(uuid()) @db.Uuid
+  transactionId String?      @map("transaction_id") @db.Uuid
+  transaction   Transaction? @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  userId        String?      @map("user_id") @db.Uuid
+  user          User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  ruleKey       String       @map("rule_key")
+  ruleVersion   Int          @default(1) @map("rule_version")
+  triggered     Boolean
+  score         Int
+  level         RiskLevel
+  detail        String
+  signals       Json?
+  createdAt     DateTime     @default(now()) @map("created_at")
+
+  @@index([transactionId])
+  @@index([ruleKey, createdAt])
+  @@index([level, createdAt])
+  @@map("risk_events")
+}
+
+model FraudAlert {
+  id            String         @id @default(uuid()) @db.Uuid
+  alertNumber   String         @unique @map("alert_number")
+  type          FraudAlertType
+  severity      RiskLevel
+  status        AlertStatus    @default(OPEN)
+
+  transactionId String?        @map("transaction_id") @db.Uuid
+  transaction   Transaction?   @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  userId        String?        @map("user_id") @db.Uuid
+  user          User?          @relation("FraudAlertSubject", fields: [userId], references: [id], onDelete: SetNull)
+
+  description   String
+  evidence      Json?
+  resolvedBy    String?        @map("resolved_by") @db.Uuid
+  resolvedAt    DateTime?      @map("resolved_at")
+  resolution    String?
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+
+  @@index([status, severity])
+  @@index([type, createdAt])
+  @@map("fraud_alerts")
+}
+
+/// Configurable, versioned, admin-editable. NOT legal thresholds.
+model RiskPolicy {
+  id                    String   @id @default(uuid()) @db.Uuid
+  countryCode           String   @map("country_code") @db.Char(2)
+  version               Int
+  active                Boolean  @default(false)
+
+  dailyLimitMinor       BigInt   @map("daily_limit_minor")
+  monthlyLimitMinor     BigInt   @map("monthly_limit_minor")
+  perTransactionMinMinor BigInt  @map("per_transaction_min_minor")
+  perTransactionMaxMinor BigInt  @map("per_transaction_max_minor")
+  limitCurrency         String   @map("limit_currency") @db.Char(3)
+
+  velocityWindowHours   Int      @default(24) @map("velocity_window_hours")
+  velocityMaxCount      Int      @default(5) @map("velocity_max_count")
+
+  kycRequiredAboveMinor BigInt   @map("kyc_required_above_minor")
+  reviewScoreThreshold  Int      @default(60) @map("review_score_threshold")
+  blockScoreThreshold   Int      @default(85) @map("block_score_threshold")
+
+  /// ISO-3166 alpha-2 codes treated as elevated risk.
+  highRiskCountries     String[] @map("high_risk_countries")
+
+  createdBy             String?  @map("created_by") @db.Uuid
+  createdAt             DateTime @default(now()) @map("created_at")
+
+  @@unique([countryCode, version])
+  @@index([countryCode, active])
+  @@map("risk_policies")
+}
+
+// ---------------------------------------------------------------------------
+// NOTIFICATIONS, SUPPORT, AUDIT, INFRASTRUCTURE
+// ---------------------------------------------------------------------------
+
+model Notification {
+  id            String              @id @default(uuid()) @db.Uuid
+  userId        String?             @map("user_id") @db.Uuid
+  user          User?               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactionId String?             @map("transaction_id") @db.Uuid
+  transaction   Transaction?        @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+
+  channel       NotificationChannel
+  eventKey      String              @map("event_key")
+  recipient     String
+  locale        Locale              @default(EN)
+  subject       String?
+  body          String
+  status        NotificationStatus  @default(QUEUED)
+  provider      String?
+  providerRef   String?             @map("provider_ref")
+  failureReason String?             @map("failure_reason")
+  sentAt        DateTime?           @map("sent_at")
+  createdAt     DateTime            @default(now()) @map("created_at")
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@index([eventKey])
+  @@map("notifications")
+}
+
+model SupportTicket {
+  id            String       @id @default(uuid()) @db.Uuid
+  ticketNumber  String       @unique @map("ticket_number")
+  userId        String?      @map("user_id") @db.Uuid
+  user          User?        @relation("TicketCustomer", fields: [userId], references: [id], onDelete: SetNull)
+  transactionId String?      @map("transaction_id") @db.Uuid
+  transaction   Transaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+
+  assigneeId    String?      @map("assignee_id") @db.Uuid
+  assignee      User?        @relation("TicketAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+
+  subject       String
+  body          String
+  category      String
+  status        TicketStatus @default(OPEN)
+  priority      RiskLevel    @default(LOW)
+  contactEmail  String       @map("contact_email")
+  resolvedAt    DateTime?    @map("resolved_at")
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+
+  @@index([status, createdAt])
+  @@index([userId])
+  @@map("support_tickets")
+}
+
+/// Append-only. No update or delete path exists in the application.
+model AuditLog {
+  id           String   @id @default(uuid()) @db.Uuid
+  actorId      String?  @map("actor_id") @db.Uuid
+  actor        User?    @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  actorType    String   @map("actor_type")
+  actorRoles   String[] @map("actor_roles")
+
+  action       String
+  resourceType String   @map("resource_type")
+  resourceId   String?  @map("resource_id")
+
+  /// Redacted before write — never contains PAN, CVV, passwords, or tokens.
+  before       Json?
+  after        Json?
+  metadata     Json?
+
+  ipAddress    String?  @map("ip_address")
+  userAgent    String?  @map("user_agent")
+  requestId    String?  @map("request_id")
+  success      Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([actorId, createdAt])
+  @@index([resourceType, resourceId])
+  @@index([action, createdAt])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model WebhookEvent {
+  id            String        @id @default(uuid()) @db.Uuid
+  provider      String
+  /// Provider's own event id — the uniqueness guard against replay.
+  externalId    String        @map("external_id")
+  eventType     String        @map("event_type")
+  status        WebhookStatus @default(RECEIVED)
+
+  signatureValid Boolean      @default(false) @map("signature_valid")
+  payload       Json
+  headers       Json?
+  processedAt   DateTime?     @map("processed_at")
+  error         String?
+  attemptCount  Int           @default(0) @map("attempt_count")
+  createdAt     DateTime      @default(now()) @map("created_at")
+
+  @@unique([provider, externalId])
+  @@index([status, createdAt])
+  @@map("webhook_events")
+}
+
+/// Makes every mutating financial endpoint safe to retry.
+model IdempotencyKey {
+  id           String    @id @default(uuid()) @db.Uuid
+  key          String
+  scope        String
+  userId       String?   @map("user_id") @db.Uuid
+  user         User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// sha256 of the canonical request body. A replay with a different body is a 409.
+  requestHash  String    @map("request_hash")
+  responseCode Int?      @map("response_code")
+  responseBody Json?     @map("response_body")
+  status       String    @default("IN_PROGRESS")
+  lockedAt     DateTime? @map("locked_at")
+  completedAt  DateTime? @map("completed_at")
+  expiresAt    DateTime  @map("expires_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  @@unique([scope, key])
+  @@index([expiresAt])
+  @@map("idempotency_keys")
+}
+
+/// Fixed-window counters. Production should move this to Redis.
+model RateLimitCounter {
+  id          String   @id @default(uuid()) @db.Uuid
+  bucketKey   String   @map("bucket_key")
+  windowStart DateTime @map("window_start")
+  count       Int      @default(0)
+  expiresAt   DateTime @map("expires_at")
+
+  @@unique([bucketKey, windowStart])
+  @@index([expiresAt])
+  @@map("rate_limit_counters")
+}
+
+/// Typed key/value platform configuration, audited on change.
+model PlatformSetting {
+  key         String   @id
+  value       Json
+  description String?
+  category    String   @default("general")
+  updatedBy   String?  @map("updated_by") @db.Uuid
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("platform_settings")
+}
