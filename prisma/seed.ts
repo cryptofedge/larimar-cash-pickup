@@ -168,6 +168,8 @@ interface InstitutionSeed {
   code: string;
   name: string;
   legalName: string;
+  /// Commission per disbursement, basis points. Demo placeholder.
+  commissionBps: number;
   locations: LocationSeed[];
 }
 
@@ -201,6 +203,7 @@ const INSTITUTIONS: InstitutionSeed[] = [
     code: 'DEMO-BEN',
     name: 'Banco Ejemplo Nacional (DEMO)',
     legalName: 'Banco Ejemplo Nacional, S.A. — FICTIONAL ENTITY',
+    commissionBps: 100,
     locations: [
       {
         code: 'BEN-SDQ-01',
@@ -256,6 +259,7 @@ const INSTITUTIONS: InstitutionSeed[] = [
     code: 'DEMO-CCD',
     name: 'Casa de Cambio Demostración (DEMO)',
     legalName: 'Casa de Cambio Demostración, SRL — FICTIONAL ENTITY',
+    commissionBps: 150,
     locations: [
       {
         code: 'CCD-PUJ-01',
@@ -299,6 +303,7 @@ const INSTITUTIONS: InstitutionSeed[] = [
     code: 'DEMO-RPP',
     name: 'Red de Pagos Prueba (DEMO)',
     legalName: 'Red de Pagos Prueba, SRL — FICTIONAL ENTITY',
+    commissionBps: 175,
     locations: [
       {
         code: 'RPP-SPM-01',
@@ -349,13 +354,16 @@ async function seedPickupNetwork(): Promise<{ primaryLocationId: string; institu
   for (const seed of INSTITUTIONS) {
     const institution = await prisma.pickupInstitution.upsert({
       where: { code: seed.code },
-      update: { name: seed.name, legalName: seed.legalName, isDemo: true },
+      update: { name: seed.name, legalName: seed.legalName, isDemo: true, commissionBps: seed.commissionBps },
       create: {
         code: seed.code,
         name: seed.name,
         legalName: seed.legalName,
         countryCode: 'DO',
         contactEmail: `operations@${seed.code.toLowerCase()}.demo.invalid`,
+        // Commercial terms are placeholders. A real rate is negotiated per partner.
+        commissionBps: seed.commissionBps,
+        settlementCurrency: 'DOP',
         isDemo: true,
         active: true,
       },

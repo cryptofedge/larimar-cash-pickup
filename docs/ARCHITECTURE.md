@@ -183,6 +183,25 @@ Worked example, RD$20,000 payout funded by $342.11 USD:
 
 Corrections are **reversing entries**. Nothing in the ledger is ever updated or deleted.
 
+### Settlement closes the loop
+
+`BANK_SETTLEMENT` at disbursement discharges the customer obligation and creates a
+payable to the partner who fronted the notes. That payable sits on
+`LIAB_PARTNER_SETTLEMENT_DOP` until a settlement batch is paid:
+
+| Event | Debit | Credit |
+| --- | --- | --- |
+| Settlement paid | Partner payable (liability) + partner commission (expense) | DOP FX position (asset) |
+
+Batches move `DRAFT → ISSUED → RECONCILED → PAID`, and **`PAID` is reachable only
+from `RECONCILED`** — money never leaves before both sides agree the figure.
+
+Two invariants hold it together. A disbursement can appear on at most one batch,
+enforced by a `UNIQUE` constraint on the settlement line's pickup-event id rather
+than by application logic. And settlement periods are half-open `[start, end)`, so
+a payout at exactly midnight belongs to one period and never to both — overlapping
+boundaries are how cash gets settled twice.
+
 ---
 
 ## 7. Pickup credential security

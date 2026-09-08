@@ -230,23 +230,83 @@ staff, and recorded as your attestation.
 
 ## Settlement
 
-Not implemented in this build. A real integration needs, agreed commercially and
-in writing before launch:
+### How it works
 
-| Item | Question to settle |
+Batches are generated per institution per settlement period (whole UTC days by
+default), covering the disbursements your windows made in that window.
+
+```
+DRAFT ──▶ ISSUED ──▶ RECONCILED ──▶ PAID
+             │            ▲
+             └──▶ DISPUTED ┘
+```
+
+The lifecycle is deliberately explicit. "We think we owe you this", "you agree we
+owe you this", and "we have actually paid you" are three different facts, and
+collapsing them into one flag is how settlement disputes become unresolvable.
+
+**`PAID` is reachable only from `RECONCILED`.** Funds never leave before both
+sides agree the figure.
+
+### The figures
+
+| Line | Meaning |
 | --- | --- |
-| Cadence | Daily net? Real time? Weekly? |
+| `grossPayoutMinor` | Cash your windows actually handed over in the period |
+| `commissionBps` / `commissionMinor` | Your commission, at the rate snapshotted when the batch was generated |
+| `netPayableMinor` | gross + commission — what is transferred |
+
+Commission is calculated on the **aggregate**, not per payout. Rounding each line
+and summing would drift from the contractual figure by up to half a minor unit
+per payout — invisible at ten transactions, a real argument at ten thousand.
+
+The rate is snapshotted onto the batch, so a later rate change cannot restate a
+historical statement.
+
+### Reconciliation
+
+You report your own total; we compare it to ours exactly.
+
+**There is no tolerance band.** A one-centavo discrepancy on a cash settlement
+usually means a payout is missing from one side's records, and burying it under a
+threshold means discovering it much later against a much larger number. A
+variance moves the batch to `DISPUTED` unless our analyst records an explicit
+written reason for accepting it.
+
+### A payout is settled exactly once
+
+Guaranteed by a `UNIQUE` constraint on the settlement line's pickup-event id —
+not by application logic. Re-running generation, overlapping period windows, or a
+concurrent request cannot produce a second line for the same disbursement.
+
+Settlement periods are half-open `[start, end)`, so a payout at exactly midnight
+belongs to one period and never to both.
+
+### Retrieving your statements
+
+```http
+GET /api/partner/v1/settlements
+```
+
+Scoped to your institution by the verified signature, never by a request field.
+`DRAFT` batches are excluded — an internal working figure is not a statement.
+
+A CSV statement is also available to our finance team and can be sent to you.
+Every amount in it is an integer minor-unit string, because a spreadsheet
+silently reformatting `20000.00` as a float is exactly the class of error this
+system avoids everywhere else.
+
+### Still to agree, commercially
+
+| Item | Question |
+| --- | --- |
+| Cadence | Daily is implemented. Real time? Weekly? |
 | Direction | Do you pre-fund, or do we? |
-| Float | How much DOP must be at each window, and who bears the carry? |
-| Reconciliation | File format, delivery, and the dispute window |
-| Commission | Per transaction, per volume tier, or a spread share |
+| Float | How much DOP at each window, and who bears the carry? |
 | Reserve | Do we hold one against your exposure, or you against ours? |
 | Failed payouts | Reversal path when cash is not actually handed over |
 | Cut-off times | Which side of the settlement day a late payout falls on |
-
-`LIAB_PARTNER_SETTLEMENT_DOP` accrues what is owed to partners and is visible in
-the admin ledger today, but no settlement file, reconciliation engine, or float
-telemetry exists.
+| Payment rail | **Nothing is implemented here.** Marking a batch paid records the intent and posts the ledger entry; there is no transfer behind it. |
 
 ---
 

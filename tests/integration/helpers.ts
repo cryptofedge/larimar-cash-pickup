@@ -95,8 +95,29 @@ export async function getInstitutionId(code = 'DEMO-CCD'): Promise<string> {
   return institution.id;
 }
 
-/** Remove everything a test user created, so repeat runs stay clean. */
+/**
+ * Remove everything a test user created, so repeat runs stay clean.
+ *
+ * Pickup events must go FIRST and explicitly. Both `PickupEvent.transaction` and
+ * `PickupEvent.agent` are `onDelete: SetNull`, so deleting the transaction or the
+ * user leaves the event behind with a null reference. Orphaned payout events
+ * accumulate across runs and silently pollute later settlement periods — which is
+ * exactly how the settlement suite started failing only when run alongside the
+ * others.
+ */
 export async function cleanupUser(userId: string): Promise<void> {
+  const transactions = await prisma.transaction.findMany({
+    where: { userId },
+    select: { id: true },
+  });
+  const transactionIds = transactions.map((t) => t.id);
+
+  await prisma.pickupEvent.deleteMany({ where: { agentId: userId } });
+  if (transactionIds.length > 0) {
+    await prisma.pickupEvent.deleteMany({ where: { transactionId: { in: transactionIds } } });
+    await prisma.settlementLine.deleteMany({ where: { transactionId: { in: transactionIds } } });
+  }
+
   await prisma.transaction.deleteMany({ where: { userId } });
   await prisma.identityVerification.deleteMany({ where: { userId } });
   await prisma.agentLocationAssignment.deleteMany({ where: { userId } });

@@ -325,3 +325,51 @@ export type CreateTransactionInput = z.infer<typeof createTransactionSchema>;
 export type VerifyPickupInput = z.infer<typeof verifyPickupSchema>;
 export type RedeemPickupInput = z.infer<typeof redeemPickupSchema>;
 export type SubmitKycInput = z.infer<typeof submitKycSchema>;
+
+// ---------------------------------------------------------------------------
+// Settlement
+// ---------------------------------------------------------------------------
+
+export const generateSettlementSchema = z
+  .object({
+    institutionId: uuidSchema,
+    /** Half-open [start, end). Omit both to settle the previous whole UTC day. */
+    periodStart: z.string().datetime().optional(),
+    periodEnd: z.string().datetime().optional(),
+  })
+  .strict();
+
+export const settlementActionSchema = z
+  .object({
+    batchId: uuidSchema,
+    action: z.enum(['ISSUE', 'RECONCILE', 'PAY', 'CANCEL']),
+    /** RECONCILE: the partner's own total, in integer minor units. */
+    partnerReportedMinor: minorUnitsSchema.optional(),
+    /** RECONCILE: required to accept a non-zero variance. */
+    varianceNote: z.string().trim().min(3).max(1000).optional(),
+    /** PAY: the bank transfer reference. */
+    paymentReference: z.string().trim().min(3).max(200).optional(),
+    /** CANCEL: why. */
+    reason: z.string().trim().min(3).max(500).optional(),
+  })
+  .strict()
+  .refine(
+    (value) => value.action !== 'RECONCILE' || value.partnerReportedMinor !== undefined,
+    { message: 'partnerReportedMinor is required to reconcile', path: ['partnerReportedMinor'] },
+  )
+  .refine(
+    (value) => value.action !== 'PAY' || value.paymentReference !== undefined,
+    { message: 'paymentReference is required to mark a batch paid', path: ['paymentReference'] },
+  )
+  .refine(
+    (value) => value.action !== 'CANCEL' || value.reason !== undefined,
+    { message: 'reason is required to cancel a batch', path: ['reason'] },
+  );
+
+export const listSettlementsSchema = z
+  .object({
+    institutionId: uuidSchema.optional(),
+    status: z.string().max(200).optional(),
+    limit: z.coerce.number().int().min(1).max(200).default(50),
+  })
+  .strict();

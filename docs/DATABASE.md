@@ -156,6 +156,30 @@ holding less than nothing on a customer's behalf. An earlier revision produced
 exactly that on refunds; the regression test in
 `tests/integration/transaction-lifecycle.test.ts` now guards it.
 
+### `settlement_batches` / `settlement_lines`
+
+What the platform owes each payout partner for cash they fronted.
+
+The batch is `UNIQUE (institution_id, period_start, period_end)`, so regenerating
+a period returns the existing batch instead of creating a second one.
+
+`settlement_lines.pickup_event_id` is **`UNIQUE` across the whole table**, not
+merely within a batch. That single constraint is what guarantees a disbursement
+can never be settled twice, no matter how generation is invoked, how periods
+overlap, or how many requests arrive concurrently. It is enforcement, not
+validation — application logic cannot be relied on for a property this expensive
+to get wrong.
+
+`commission_bps` is snapshotted onto the batch so a later rate change cannot
+restate a historical statement, exactly as `fee_schedules` versioning protects a
+customer receipt.
+
+> **Cleanup caveat.** `PickupEvent` is `onDelete: SetNull` on both its transaction
+> and its agent, so deleting either leaves the event behind. That is correct for
+> production — a payout record must outlive the rows around it — but it means test
+> teardown has to remove pickup events explicitly, or orphans accumulate and
+> pollute later settlement periods.
+
 ### `audit_logs` — append-only, redacted
 
 `actor_id`, `actor_type`, `actor_roles[]`, `action`, `resource_type`,

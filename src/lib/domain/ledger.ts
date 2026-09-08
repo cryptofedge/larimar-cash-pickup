@@ -320,6 +320,43 @@ export function buildBankSettlementPosting(input: {
   );
 }
 
+/**
+ * Settling a batch with a payout partner.
+ *
+ * Discharges what we owe them for cash they fronted, recognises the commission
+ * as an expense, and reduces our DOP position by the total transferred. This is
+ * the posting that finally closes the loop opened by `buildBankSettlementPosting`
+ * at the moment of disbursement.
+ */
+export function buildPartnerSettlementPosting(input: {
+  batchReference: string;
+  grossPayout: Money;
+  commission: Money;
+  netPayable: Money;
+}): LedgerPosting {
+  const entries: PostingEntry[] = [
+    entry('LIAB_PARTNER_SETTLEMENT_DOP', 'DEBIT', input.grossPayout, 'Partner payable discharged'),
+  ];
+
+  if (!isZero(input.commission)) {
+    entries.push(
+      entry('EXP_PARTNER_COMMISSION_DOP', 'DEBIT', input.commission, 'Partner commission'),
+    );
+  }
+
+  entries.push(
+    entry('ASSET_FX_POSITION_DOP', 'CREDIT', input.netPayable, 'DOP transferred to partner'),
+  );
+
+  return posting(
+    'BANK_SETTLEMENT',
+    input.netPayable.currency,
+    `Settlement paid to partner for ${input.batchReference}`,
+    `SETTLEMENT:${input.batchReference}`,
+    entries,
+  );
+}
+
 /** Money returned to the customer before any cash was collected. */
 export function buildRefundPosting(input: {
   transactionRef: string;

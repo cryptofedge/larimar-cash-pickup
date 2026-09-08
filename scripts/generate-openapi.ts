@@ -17,13 +17,16 @@ import {
   complianceReviewSchema,
   confirmPaymentSchema,
   createTransactionSchema,
+  generateSettlementSchema,
   listLocationsSchema,
+  listSettlementsSchema,
   loginSchema,
   quoteRequestSchema,
   redeemPickupSchema,
   registerSchema,
   rejectPickupSchema,
   requestPasswordResetSchema,
+  settlementActionSchema,
   submitKycSchema,
   supportTicketSchema,
   verifyPickupSchema,
@@ -278,6 +281,7 @@ const spec = {
     { name: 'Pickup', description: 'Payout window operations' },
     { name: 'Compliance', description: 'Holds, releases, and case management' },
     { name: 'Admin', description: 'Metrics and search' },
+    { name: 'Settlement', description: 'What the platform owes payout partners' },
     { name: 'Support', description: 'Support tickets' },
     { name: 'Webhooks', description: 'Provider callbacks' },
     { name: 'Partner API', description: 'Server-to-server API for payout institutions' },
@@ -589,6 +593,56 @@ const spec = {
         summary: 'Partner: confirm a cash payout',
         description:
           'Requires an explicit `identityVerified` assertion and the partner own idempotency key. Returns the settlement amount now payable to the partner.',
+        tag: 'Partner API',
+        security: 'partner',
+      }),
+    },
+    '/api/admin/settlement': {
+      get: operation({
+        summary: 'List settlement batches',
+        description:
+          'Also returns unsettled exposure per partner (cash fronted but not yet repaid) and float pressure per location.',
+        tag: 'Settlement',
+        query: listSettlementsSchema,
+        security: 'session',
+        permission: 'settlement.read',
+      }),
+      post: operation({
+        summary: 'Generate a settlement batch',
+        description:
+          'Totals a period’s disbursements for one partner. Idempotent per (institution, period), and a disbursement can never appear on two batches — enforced by a unique constraint, not application logic. Omit the period to settle the previous whole UTC day.',
+        tag: 'Settlement',
+        body: generateSettlementSchema,
+        security: 'session',
+        permission: 'settlement.generate',
+        idempotent: true,
+      }),
+      put: operation({
+        summary: 'Issue, reconcile, pay, or cancel a batch',
+        description:
+          'Permissions differ per action: ISSUE and CANCEL need `settlement.generate`, RECONCILE needs `settlement.reconcile`, and PAY — the only action that moves money — needs `settlement.pay`. PAY is reachable only from RECONCILED, so funds never leave before both sides agree the figure. Reconciling with a variance requires an explicit note; without one the batch is DISPUTED.',
+        tag: 'Settlement',
+        body: settlementActionSchema,
+        security: 'session',
+        permission: 'settlement.read',
+        idempotent: true,
+      }),
+    },
+    '/api/admin/settlement/{id}': {
+      get: operation({
+        summary: 'Settlement batch detail',
+        description:
+          'Full batch with its lines. `?format=csv` returns the statement a partner reconciles against; amounts stay integer minor-unit strings even in CSV.',
+        tag: 'Settlement',
+        security: 'session',
+        permission: 'settlement.read',
+      }),
+    },
+    '/api/partner/v1/settlements': {
+      get: operation({
+        summary: 'Partner: your settlement statements',
+        description:
+          'Scoped to the authenticated institution by the verified signature, never by a request field. DRAFT batches are excluded — an internal working figure is not a statement.',
         tag: 'Partner API',
         security: 'partner',
       }),

@@ -31,6 +31,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     { href: '/admin/transactions', label: m.admin.transactions, permission: 'transaction.read.any' as const },
     { href: '/admin/compliance', label: m.admin.compliance, permission: 'compliance.case.read' as const },
     { href: '/admin/ledger', label: m.admin.ledger, permission: 'ledger.read' as const },
+    { href: '/admin/settlement', label: 'Settlement', permission: 'settlement.read' as const },
     { href: '/admin/locations', label: m.admin.locations, permission: 'pickup.location.read' as const },
     { href: '/admin/audit', label: m.admin.auditLog, permission: 'admin.audit.read' as const },
   ].filter((item) => hasAnyPermission(principal.roles, [item.permission]));

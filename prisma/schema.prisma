@@ -249,6 +249,20 @@ enum Locale {
   ES
 }
 
+enum SettlementStatus {
+  /// Generated internally; not yet sent to the partner.
+  DRAFT
+  /// Statement issued to the partner, awaiting their confirmation.
+  ISSUED
+  /// Partner figures received and matched (or a variance was accepted).
+  RECONCILED
+  /// Funds transferred and the ledger posted.
+  PAID
+  /// Variance unresolved. Blocks payment until settled.
+  DISPUTED
+  CANCELLED
+}
+
 // ---------------------------------------------------------------------------
 // IDENTITY & ACCESS
 // ---------------------------------------------------------------------------
@@ -819,6 +833,12 @@ model PickupInstitution {
   apiSecretEnc    String?          @map("api_secret_enc")
 
   settlementAccountId String?      @map("settlement_account_id") @db.Uuid
+  /// Commission paid to this partner per disbursement, in basis points.
+  /// Commercial terms; zero until an agreement exists.
+  commissionBps   Int              @default(0) @map("commission_bps")
+  /// Currency the partner is settled in. Payouts and settlement share it today,
+  /// but they are separate concepts and a future partner may differ.
+  settlementCurrency String        @default("DOP") @map("settlement_currency") @db.Char(3)
 
   createdAt       DateTime         @default(now()) @map("created_at")
   updatedAt       DateTime         @updatedAt @map("updated_at")
@@ -827,9 +847,93 @@ model PickupInstitution {
   locations       PickupLocation[]
   staff           User[]
   pickupEvents    PickupEvent[]
+  settlements     SettlementBatch[]
 
   @@index([countryCode, active])
   @@map("pickup_institutions")
+}
+
+/**
+ * What the platform owes a payout partner for cash they fronted.
+ *
+ * Generated per institution per period. The lifecycle is deliberately explicit —
+ * DRAFT, ISSUED, RECONCILED, PAID — because "we think we owe you this" and "you
+ * agree we owe you this" and "we have actually paid you" are three different
+ * facts, and conflating them is how settlement disputes start.
+ */
+model SettlementBatch {
+  id             String            @id @default(uuid()) @db.Uuid
+  reference      String            @unique
+  institutionId  String            @map("institution_id") @db.Uuid
+  institution    PickupInstitution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+
+  periodStart    DateTime          @map("period_start")
+  periodEnd      DateTime          @map("period_end")
+  currency       String            @db.Char(3)
+
+  payoutCount       Int            @map("payout_count")
+  /// Cash the partner actually handed over during the period.
+  grossPayoutMinor  BigInt         @map("gross_payout_minor")
+  /// Snapshot of the rate applied, so a later rate change cannot restate history.
+  commissionBps     Int            @map("commission_bps")
+  commissionMinor   BigInt         @map("commission_minor")
+  /// gross + commission — what actually gets transferred.
+  netPayableMinor   BigInt         @map("net_payable_minor")
+
+  status         SettlementStatus  @default(DRAFT)
+
+  /// The partner's own figure, and the difference from ours. A variance is
+  /// recorded rather than silently reconciled away.
+  partnerReportedMinor BigInt?     @map("partner_reported_minor")
+  varianceMinor        BigInt?     @map("variance_minor")
+  varianceNote         String?     @map("variance_note")
+  reconciledAt         DateTime?   @map("reconciled_at")
+  reconciledBy         String?     @map("reconciled_by") @db.Uuid
+
+  issuedAt       DateTime?         @map("issued_at")
+  paidAt         DateTime?         @map("paid_at")
+  paidBy         String?           @map("paid_by") @db.Uuid
+  paymentReference String?         @map("payment_reference")
+
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+  createdBy      String?           @map("created_by") @db.Uuid
+
+  lines          SettlementLine[]
+
+  /// One batch per institution per period. Re-running generation is idempotent.
+  @@unique([institutionId, periodStart, periodEnd])
+  @@index([status, periodEnd])
+  @@index([institutionId, status])
+  @@map("settlement_batches")
+}
+
+/**
+ * One disbursement inside a batch.
+ *
+ * `pickupEventId` is UNIQUE across the whole table, not merely within a batch.
+ * That single constraint is what guarantees a payout can never be settled twice,
+ * no matter how generation is invoked or re-invoked.
+ */
+model SettlementLine {
+  id            String          @id @default(uuid()) @db.Uuid
+  batchId       String          @map("batch_id") @db.Uuid
+  batch         SettlementBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  pickupEventId String          @unique @map("pickup_event_id") @db.Uuid
+  transactionId String?         @map("transaction_id") @db.Uuid
+  transactionRef String?        @map("transaction_ref")
+  locationId    String?         @map("location_id") @db.Uuid
+  locationCode  String?         @map("location_code")
+
+  amountMinor   BigInt          @map("amount_minor")
+  currency      String          @db.Char(3)
+  disbursedAt   DateTime        @map("disbursed_at")
+  createdAt     DateTime        @default(now()) @map("created_at")
+
+  @@index([batchId])
+  @@index([transactionId])
+  @@map("settlement_lines")
 }
 
 model PickupLocation {

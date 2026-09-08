@@ -135,7 +135,7 @@ PRESENTATION   src/app, src/components      React Server Components, i18n. No ar
 HTTP           src/app/api                  Zod parsing, authn, authz, rate limit, idempotency.
 SERVICES       src/server/services          Use cases inside DB transactions.
 DOMAIN         src/lib/domain               Money, FX, fees, state machine, codes, risk, ledger.
-                                            Pure. No I/O. No clock. 296 tests, no infrastructure.
+                                            Pure. No I/O. No clock. 329 tests, no infrastructure.
 PORTS          src/server/providers         Payment · FX · KYC · Sanctions · Notifications
 PERSISTENCE    prisma/schema.prisma         PostgreSQL 16. Constraints enforce the invariants too.
 ```
@@ -185,11 +185,11 @@ A bearer instrument for cash, treated as one:
 ## Test results
 
 ```
-Unit          296 passed    domain logic, zero infrastructure, ~2s
-Integration    65 passed    real PostgreSQL: concurrency, constraints, RBAC, limits
+Unit          329 passed    domain logic, zero infrastructure, ~2s
+Integration    81 passed    real PostgreSQL: concurrency, constraints, RBAC, limits
 E2E            28 passed    Playwright, desktop + mobile, full browser journeys
               ───────────
-              389 passed
+              438 passed
 ```
 
 ```bash
@@ -199,7 +199,7 @@ npm run test:e2e    # Playwright (builds and serves the app)
 npm run typecheck && npm run lint
 ```
 
-Four findings the tests produced, all now fixed and guarded:
+Five findings the tests produced, all now fixed and guarded:
 
 - **A rejected-KYC transaction could reach `PICKED_UP`.** An exhaustive
   reachability test found a path `KYC_REJECTED → CANCELLED → REFUNDED →
@@ -217,6 +217,12 @@ Four findings the tests produced, all now fixed and guarded:
   risk-based collection delay blocked `verify` while `redeem` sailed straight
   through — so an agent calling redeem directly bypassed it entirely. Redemption
   now re-applies every guard rather than trusting the earlier verify call.
+- **Test cleanup leaked payout events between runs.** `PickupEvent` is
+  `onDelete: SetNull` on both its transaction and its agent, so deleting either
+  left the event behind. Orphans accumulated and silently polluted later
+  settlement periods — the settlement suite passed alone and failed in the full
+  run. Cleanup now removes them explicitly, verified by two consecutive green
+  runs leaving zero residue.
 
 ---
 
@@ -272,7 +278,9 @@ npm run openapi   # → public/openapi.json
   contributes risk weight and is never an authentication factor.
 - **Rate limiting uses fixed windows** in PostgreSQL, so a burst at a window
   boundary is possible.
-- **No settlement file generation, reconciliation engine, or float management.**
+- **Settlement records intent, not movement.** Batches, reconciliation, CSV
+  statements, and the ledger posting are implemented; there is no payment rail
+  behind "mark paid".
 - **Single region, no disaster-recovery topology.**
 - **Not penetration tested. No PCI DSS assessment.**
 
@@ -292,7 +300,8 @@ under which category. See [`LEGAL_AND_COMPLIANCE.md §9`](docs/LEGAL_AND_COMPLIA
 3. Move secrets to a managed store with rotation, including a versioned pickup
    pepper with dual-read so rotation does not invalidate live codes.
 4. Decide the partial-refund policy and implement the apportionment.
-5. Build settlement: partner reconciliation, float telemetry, settlement files.
+5. Connect a payment rail to settlement, and agree cadence, float, and reserve
+   terms with each partner.
 6. Replace the mock providers one at a time behind the existing interfaces.
 7. Independent penetration test and PCI scoping.
 8. Observability: ship the audit stream somewhere that alerts.

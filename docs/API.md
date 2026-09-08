@@ -421,6 +421,37 @@ the plaintext ever being stored.
 
 ---
 
+### Settlement
+
+`GET /api/admin/settlement` — batches, plus unsettled exposure per partner (cash
+fronted but not repaid) and float pressure per location.
+
+`POST /api/admin/settlement` — generate a batch. Idempotent per
+(institution, period); omit the period to settle the previous whole UTC day. A
+disbursement can never appear on two batches, enforced by a unique constraint.
+
+`PUT /api/admin/settlement` — `ISSUE`, `RECONCILE`, `PAY`, or `CANCEL`.
+Permissions differ per action: `ISSUE`/`CANCEL` need `settlement.generate`,
+`RECONCILE` needs `settlement.reconcile`, and `PAY` — the only action that moves
+money — needs `settlement.pay`.
+
+```json
+{ "batchId": "uuid", "action": "RECONCILE", "partnerReportedMinor": "2000000" }
+```
+
+Reconciliation is **exact**: no tolerance band. A variance moves the batch to
+`DISPUTED` unless `varianceNote` explicitly accepts it, and the note is audited.
+`PAY` is reachable only from `RECONCILED`.
+
+`GET /api/admin/settlement/{id}` — batch detail with lines.
+`?format=csv` returns the partner statement; amounts stay integer minor-unit
+strings even in CSV.
+
+`GET /api/partner/v1/settlements` — a partner's own statements, scoped by the
+verified signature rather than by any request field. `DRAFT` batches are excluded.
+
+---
+
 ### Webhooks
 
 `POST /api/webhooks/payment` · `POST /api/webhooks/kyc`
