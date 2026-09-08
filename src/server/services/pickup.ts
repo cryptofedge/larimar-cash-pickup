@@ -22,6 +22,7 @@ import {
 } from '@/lib/domain/ledger';
 import {
   checkCodeUsable,
+  collectableFromFor,
   expiryFrom,
   generatePickupCredential,
   hashCode,
@@ -29,6 +30,7 @@ import {
   maskCode,
   normalizeCode,
   safeCompareHash,
+  shouldBurnAttempt,
   shouldLockAfterFailure,
 } from '@/lib/domain/pickup-code';
 import { detectCodeBruteForce } from '@/lib/domain/risk';
@@ -47,6 +49,8 @@ export interface IssuedCredential {
   readonly code: string;
   readonly secret: string;
   readonly expiresAt: Date;
+  /** Set when a risk-based hold applies; null means immediately collectable. */
+  readonly collectableFrom: Date | null;
 }
 
 /**
@@ -65,6 +69,28 @@ export async function issuePickupCode(
   const issuedAt = new Date();
   const expiresAt = expiryFrom(issuedAt, country.pickupCodeTtlDays);
 
+  // Risk-based collection delay. Read here rather than passed in so every caller
+  // — automatic release at capture, and manual release from compliance — gets
+  // the control without having to remember to apply it.
+  const [transaction, policy] = await Promise.all([
+    client.transaction.findUnique({
+      where: { id: transactionId },
+      select: { riskScore: true },
+    }),
+    client.riskPolicy.findFirst({
+      where: { countryCode: country.code, active: true },
+      orderBy: { version: 'desc' },
+      select: { collectionDelayMinutes: true, collectionDelayRiskThreshold: true },
+    }),
+  ]);
+
+  const collectableFrom = collectableFromFor({
+    issuedAt,
+    riskScore: transaction?.riskScore ?? 0,
+    delayMinutes: policy?.collectionDelayMinutes ?? 0,
+    riskThreshold: policy?.collectionDelayRiskThreshold ?? 0,
+  });
+
   await client.pickupCode.create({
     data: {
       transactionId,
@@ -73,11 +99,12 @@ export async function issuePickupCode(
       prefix: credential.prefix,
       status: 'ACTIVE',
       maxAttempts: country.pickupCodeMaxAttempts,
+      collectableFrom,
       expiresAt,
     },
   });
 
-  return { code: credential.code, secret: credential.secret, expiresAt };
+  return { code: credential.code, secret: credential.secret, expiresAt, collectableFrom };
 }
 
 // ---------------------------------------------------------------------------
@@ -101,6 +128,8 @@ export interface AgentTransactionView {
   readonly remainingMinor: string;
   readonly createdAt: string;
   readonly expiresAt: string;
+  /** ISO timestamp when a held transaction becomes collectable, or null. */
+  readonly collectableFrom: string | null;
   readonly acceptedDocuments: readonly string[];
   readonly complianceCleared: boolean;
   readonly complianceNote: string | null;
@@ -165,12 +194,18 @@ export async function verifyPickupCode(input: VerifyInput): Promise<VerifyResult
       attemptCount: record.attemptCount,
       maxAttempts: record.maxAttempts,
       expiresAt: record.expiresAt,
+      collectableFrom: record.collectableFrom,
     },
     new Date(),
   );
 
   if (!usable.ok) {
-    await recordFailedAttempt(input, codeHash, usable.code, record.transactionId);
+    // A code presented during its security hold is a customer arriving early,
+    // not an attacker guessing. Record it, but do not consume an attempt — an
+    // impatient customer must not be able to lock themselves out of their cash.
+    await recordFailedAttempt(input, codeHash, usable.code, record.transactionId, {
+      burnAttempt: shouldBurnAttempt(usable.code),
+    });
     return { ok: false, code: usable.code, message: usable.reason };
   }
 
@@ -242,6 +277,7 @@ export async function verifyPickupCode(input: VerifyInput): Promise<VerifyResult
       remainingMinor: remaining.toString(),
       createdAt: transaction.createdAt.toISOString(),
       expiresAt: record.expiresAt.toISOString(),
+      collectableFrom: record.collectableFrom?.toISOString() ?? null,
       acceptedDocuments: country.acceptedIdDocuments,
       complianceCleared: hold === undefined,
       complianceNote: hold ? 'On hold — do not disburse' : null,
@@ -309,7 +345,10 @@ async function recordFailedAttempt(
   attemptedCodeHash: string | null,
   reason: string,
   transactionId?: string,
+  options: { burnAttempt?: boolean } = {},
 ): Promise<void> {
+  // Named distinctly from the burnAttempt() helper above to avoid shadowing it.
+  const shouldCountAttempt = options.burnAttempt ?? true;
   await prisma.pickupEvent.create({
     data: {
       transactionId: transactionId ?? null,
@@ -324,7 +363,7 @@ async function recordFailedAttempt(
     },
   });
 
-  if (transactionId && attemptedCodeHash) {
+  if (shouldCountAttempt && transactionId && attemptedCodeHash) {
     const record = await prisma.pickupCode.findFirst({
       where: { codeHash: attemptedCodeHash },
       select: { id: true, attemptCount: true, maxAttempts: true, status: true },
@@ -440,12 +479,16 @@ export async function redeemPickupCode(input: RedeemInput): Promise<RedeemResult
 
     if (!record) throw new DomainError('PICKUP_CODE_INVALID', 'That code is not valid');
 
+    // Every guard is re-applied here, not just trusted from the earlier verify
+    // call. Redemption is a separate endpoint an agent can reach directly, so a
+    // control enforced only at verification is a control that can be skipped.
     const usable = checkCodeUsable(
       {
         status: record.status,
         attemptCount: record.attemptCount,
         maxAttempts: record.maxAttempts,
         expiresAt: record.expiresAt,
+        collectableFrom: record.collectableFrom,
       },
       new Date(),
     );
@@ -768,6 +811,7 @@ export async function getPickupCodeStatus(transactionId: string, userId: string)
     select: {
       status: true,
       expiresAt: true,
+      collectableFrom: true,
       attemptCount: true,
       maxAttempts: true,
       redeemedAt: true,

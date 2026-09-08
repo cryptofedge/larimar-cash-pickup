@@ -72,6 +72,7 @@ export function NewTransactionFlow({
     pickupCode: string | null;
     pickupSecret: string | null;
     expiresAt: string | null;
+    collectableFrom: string | null;
     transactionId: string;
   } | null>(null);
 
@@ -195,6 +196,7 @@ export function NewTransactionFlow({
         pickupCode: string | null;
         pickupSecret: string | null;
         expiresAt: string | null;
+        collectableFrom: string | null;
         transactionId: string;
         failureMessage?: string | null;
         error?: { message: string };
@@ -216,6 +218,7 @@ export function NewTransactionFlow({
         pickupCode: confirmed.pickupCode,
         pickupSecret: confirmed.pickupSecret,
         expiresAt: confirmed.expiresAt,
+        collectableFrom: confirmed.collectableFrom,
         transactionId: confirmed.transactionId,
       });
       setStep('result');
@@ -530,6 +533,7 @@ function ResultPanel({
     pickupCode: string | null;
     pickupSecret: string | null;
     expiresAt: string | null;
+    collectableFrom: string | null;
     transactionId: string;
   };
   payoutLabel: string;
@@ -598,6 +602,21 @@ function ResultPanel({
           ) : null}
         </div>
       </div>
+
+      {result.collectableFrom ? (
+        <div className="rounded-xl border border-larimar-300 bg-larimar-50 p-4">
+          <p className="text-sm font-semibold text-larimar-900">{m.pickup.securityHoldTitle}</p>
+          <p className="mt-1 text-sm text-larimar-800">{m.pickup.securityHoldBody}</p>
+          <p className="mt-2 text-sm font-semibold text-larimar-900">
+            {interpolate(m.pickup.collectableFrom, {
+              date: new Intl.DateTimeFormat(INTL_LOCALES[locale], {
+                dateStyle: 'medium',
+                timeStyle: 'short',
+              }).format(new Date(result.collectableFrom)),
+            })}
+          </p>
+        </div>
+      ) : null}
 
       <div className="rounded-xl border border-warning-500/40 bg-warning-50 p-4">
         <p className="text-sm font-semibold text-warning-700">{m.pickup.securityWarning}</p>

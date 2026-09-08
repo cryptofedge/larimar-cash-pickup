@@ -55,6 +55,9 @@ export const PUT = defineRoute(
       pickupCode: result.credential?.code ?? null,
       pickupSecret: result.credential?.secret ?? null,
       expiresAt: result.credential?.expiresAt ?? null,
+      // When a risk-based hold applies, the customer is told up front rather
+      // than discovering it at the counter.
+      collectableFrom: result.credential?.collectableFrom ?? null,
       actionUrl: result.actionUrl ?? null,
       failureCode: result.failureCode ?? null,
       failureMessage: result.failureMessage ?? null,

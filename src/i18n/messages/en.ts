@@ -216,6 +216,10 @@ export const en = {
     amountToCollect: 'Amount to collect',
     expiresOn: 'Valid until {date}',
     bringId: 'Bring a valid {documents}.',
+    collectableFrom: 'Collectable from {date}',
+    securityHoldTitle: 'Security hold',
+    securityHoldBody:
+      'This transaction is held briefly as a security measure. Your code works normally once the hold lifts — nothing further is needed from you.',
     securityWarning:
       'Treat this code like cash. Anyone with this code and matching identification could collect these funds.',
     findLocation: 'Find a pickup location',
@@ -309,6 +313,8 @@ export const en = {
     lockedCode: 'That code is locked after too many failed attempts.',
     alreadyRedeemed: 'That code has already been redeemed.',
     notReady: 'That transaction is not ready for pickup.',
+    notYetCollectable: 'This transaction is in a security hold and cannot be paid yet.',
+    collectableAt: 'Collectable from {date}',
     wrongLocation: 'That transaction is not assigned to your location.',
     attemptsRemaining: '{count} attempts remaining',
   },

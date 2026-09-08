@@ -95,6 +95,21 @@ catches.
 produce exactly one payout; PostgreSQL aborts the loser. This is proven by an
 integration test that fires three concurrent redemptions and asserts one success.
 
+**Risk-based collection delay.** A code issued for a transaction scoring at or above the
+policy threshold is not collectable until a hold period elapses (seeded at 30 minutes for
+MEDIUM and above; low-risk customers are unaffected). Stolen-card fraud is
+time-sensitive, so the hold gives the issuer a window to decline before the cash is
+irrecoverable.
+
+The hold is checked at **both** verification and redemption. Enforcing it only at
+verification would leave it bypassable by an agent calling redeem directly — which is
+exactly what an integration test caught during implementation, and why that test now
+exists permanently.
+
+Presenting a code early does **not** consume a verification attempt: an early arrival is
+an impatient customer, not an attacker, and burning an attempt would let them lock
+themselves out of their own cash.
+
 ---
 
 ## 4. Passwords and sessions
@@ -314,10 +329,14 @@ is stated in `.env.example` next to the variable.
 Stated plainly, because an incomplete security posture presented as complete is
 worse than none.
 
+Two of these are now behind their own named flags rather than folded into
+`DEMO_MODE`, and the process prints a warning at startup listing whichever are
+active — because an insecure default nobody can see is the one that ships.
+
 | Gap | Impact | Required before real money |
 | --- | --- | --- |
-| **MFA bypass in demo mode** | Staff sign in without TOTP when `DEMO_MODE=true` | Remove the bypass; enforce enrolment |
-| **Password reset token logged** | Reset tokens print to the console in demo mode | Delete that line; deliver by email only |
+| **MFA bypass** (`DEMO_ALLOW_MFA_BYPASS=true`) | Staff sign in without TOTP | Set to `false`, then delete the branch once enrolment exists |
+| **Reset token logged** (`DEMO_LOG_RESET_TOKENS=true`) | Reset tokens print to the console | Set to `false`; deliver by email only |
 | **Rate limiting is database-backed** | Fixed windows allow boundary bursts; adds DB load | Move to Redis with a sliding window |
 | **Idempotency is database-backed** | Same | Move to Redis |
 | **Secrets in environment variables** | No rotation, no access audit, present on disk | KMS / Secrets Manager with automatic rotation |

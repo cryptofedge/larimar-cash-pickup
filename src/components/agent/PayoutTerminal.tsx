@@ -15,6 +15,7 @@ interface AgentView {
   remainingMinor: string;
   createdAt: string;
   expiresAt: string;
+  collectableFrom: string | null;
   acceptedDocuments: string[];
   complianceCleared: boolean;
   complianceNote: string | null;
@@ -97,7 +98,9 @@ export function PayoutTerminal({
               ? m.agent.lockedCode
               : errorCode === 'PICKUP_CODE_ALREADY_REDEEMED'
                 ? m.agent.alreadyRedeemed
-                : errorCode === 'PICKUP_NOT_READY'
+                : errorCode === 'PICKUP_CODE_NOT_YET_COLLECTABLE'
+              ? m.agent.notYetCollectable
+            : errorCode === 'PICKUP_NOT_READY'
                   ? m.agent.notReady
                   : errorCode === 'FORBIDDEN'
                     ? m.agent.wrongLocation
@@ -257,6 +260,19 @@ export function PayoutTerminal({
             </p>
           </div>
 
+          {view.collectableFrom && new Date(view.collectableFrom) > new Date() ? (
+            <div className="border-t border-larimar-200 bg-larimar-50 px-6 py-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-larimar-700">
+                {m.pickup.securityHoldTitle}
+              </p>
+              <p className="mt-1 text-sm font-semibold text-larimar-900">
+                {interpolate(m.agent.collectableAt, {
+                  date: new Date(view.collectableFrom).toLocaleString(intl),
+                })}
+              </p>
+            </div>
+          ) : null}
+
           <div className="border-t border-navy-100 px-6 py-4">
             <p className="text-xs font-semibold uppercase tracking-wide text-navy-400">
               {m.agent.idRequirements}
@@ -351,7 +367,12 @@ export function PayoutTerminal({
                 void approve();
               }
             }}
-            disabled={pending || !identityConfirmed || !view.complianceCleared}
+            disabled={
+              pending ||
+              !identityConfirmed ||
+              !view.complianceCleared ||
+              (view.collectableFrom !== null && new Date(view.collectableFrom) > new Date())
+            }
             className="btn-success w-full text-lg"
           >
             {m.agent.approvePickup}

@@ -136,6 +136,10 @@ async function seedPricing(): Promise<void> {
       limitCurrency: 'USD',
       velocityWindowHours: 24,
       velocityMaxCount: 5,
+      // Risk-based collection delay: low-risk customers collect immediately,
+      // anything scoring MEDIUM or above waits 30 minutes. Demo values.
+      collectionDelayMinutes: 30,
+      collectionDelayRiskThreshold: 30,
       kycRequiredAboveMinor: 25_000n, // $250.00
       reviewScoreThreshold: 60,
       blockScoreThreshold: 85,

@@ -232,6 +232,134 @@ describe('single redemption is enforced by the database', () => {
   });
 });
 
+/**
+ * Risk-based collection delay, end to end against the database.
+ *
+ * The seeded policy holds anything scoring MEDIUM (30) or above for 30 minutes.
+ * These tests drive the real service rather than the pure helper, so they also
+ * prove the policy is actually read at issuance and enforced at redemption.
+ */
+describe('collection delay', () => {
+  it('test_collection_delay_blocks_redemption_while_the_hold_is_active', async () => {
+    // Arrange — a funded transaction whose code we force into a held state.
+    const { created, confirmed } = await fundedTransaction(120_000n);
+    const credential = confirmed.credential;
+    if (!credential) throw new Error('no credential');
+
+    const holdUntil = new Date(Date.now() + 30 * 60_000);
+    await prisma.pickupCode.update({
+      where: { transactionId: created.transactionId },
+      data: { collectableFrom: holdUntil },
+    });
+
+    // Act
+    const verified = await verifyPickupCode({
+      code: credential.code,
+      agentId: agent.id,
+      institutionId,
+      locationId,
+    });
+
+    // Assert — the agent is told why, and no cash moves.
+    expect(verified.ok).toBe(false);
+    if (!verified.ok) expect(verified.code).toBe('PICKUP_CODE_NOT_YET_COLLECTABLE');
+
+    await expect(
+      redeemPickupCode({
+        code: credential.code,
+        agentId: agent.id,
+        institutionId,
+        locationId,
+        documentType: 'PASSPORT',
+        documentLast4: '4567',
+        amountMinor: 120_000n,
+      }),
+    ).rejects.toThrow();
+
+    const untouched = await prisma.transaction.findUniqueOrThrow({
+      where: { id: created.transactionId },
+      select: { paidOutMinor: true, status: true },
+    });
+    expect(untouched.paidOutMinor).toBe(0n);
+    expect(untouched.status).toBe('READY_FOR_PICKUP');
+  });
+
+  it('test_collection_delay_does_not_consume_an_attempt_when_presented_early', async () => {
+    // Arrange
+    const { created, confirmed } = await fundedTransaction(120_000n);
+    const credential = confirmed.credential;
+    if (!credential) throw new Error('no credential');
+
+    await prisma.pickupCode.update({
+      where: { transactionId: created.transactionId },
+      data: { collectableFrom: new Date(Date.now() + 30 * 60_000) },
+    });
+
+    // Act — present it repeatedly, more times than the attempt cap allows.
+    for (let i = 0; i < 7; i += 1) {
+      await verifyPickupCode({
+        code: credential.code,
+        agentId: agent.id,
+        institutionId,
+        locationId,
+      });
+    }
+
+    // Assert — an impatient customer must not be able to lock themselves out.
+    const code = await prisma.pickupCode.findUniqueOrThrow({
+      where: { transactionId: created.transactionId },
+      select: { attemptCount: true, status: true },
+    });
+    expect(code.attemptCount).toBe(0);
+    expect(code.status).toBe('ACTIVE');
+  });
+
+  it('test_collection_delay_permits_redemption_once_the_hold_has_lifted', async () => {
+    // Arrange — a hold that has already expired.
+    const { created, confirmed } = await fundedTransaction(120_000n);
+    const credential = confirmed.credential;
+    if (!credential) throw new Error('no credential');
+
+    await prisma.pickupCode.update({
+      where: { transactionId: created.transactionId },
+      data: { collectableFrom: new Date(Date.now() - 60_000) },
+    });
+
+    // Act
+    const redeemed = await redeemPickupCode({
+      code: credential.code,
+      agentId: agent.id,
+      institutionId,
+      locationId,
+      documentType: 'PASSPORT',
+      documentLast4: '4567',
+      amountMinor: 120_000n,
+    });
+
+    // Assert
+    expect(redeemed.fullyPaid).toBe(true);
+
+    const final = await prisma.transaction.findUniqueOrThrow({
+      where: { id: created.transactionId },
+      select: { status: true },
+    });
+    expect(final.status).toBe('PICKED_UP');
+  });
+
+  it('test_collection_delay_leaves_low_risk_transactions_immediately_collectable', async () => {
+    // Arrange / Act — a clean customer scores LOW, below the seeded threshold.
+    const { created } = await fundedTransaction(120_000n);
+
+    const code = await prisma.pickupCode.findUniqueOrThrow({
+      where: { transactionId: created.transactionId },
+      select: { collectableFrom: true },
+    });
+
+    // Assert — the honest-customer path stays instant.
+    expect(code.collectableFrom).toBeNull();
+  });
+});
+
 describe('pickup code security', () => {
   it('test_pickup_code_security_rejects_an_unknown_code', async () => {
     const result = await verifyPickupCode({

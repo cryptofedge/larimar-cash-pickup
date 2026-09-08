@@ -38,11 +38,26 @@ arrives later and is unrecoverable.
 | Chargeback history weighted heavily (40 points) | `history.chargebacks` rule |
 | Card-testing detection | `history.failedPayments` — 3+ recent declines |
 
-**Not yet implemented, and needed:** a mandatory delay between funding and
-collection eligibility. It is the single most effective control against this
-attack — most stolen-card fraud is time-sensitive — and it is a product decision
-(it directly degrades the "arrange cash before you need it" promise) rather than
-an engineering one.
+**Risk-based collection delay.** A funded transaction scoring at or above the
+policy threshold is held before its code becomes collectable. Most stolen-card
+fraud is time-sensitive, and the delay gives the issuer a window to decline
+before the pesos are irrecoverable.
+
+It applies **only above the threshold**, because a blanket delay would break the
+"arrange cash before you need it" promise for every honest customer in order to
+slow a small minority. Seeded demo values: 30 minutes for anything scoring
+MEDIUM (30) or above; low-risk customers collect immediately. Both values are
+database rows on `RiskPolicy`, versioned and admin-editable.
+
+Two details that matter:
+
+- **The delay is checked at verification *and* again at redemption.** Enforcing
+  it only at verification would leave it bypassable by an agent calling redeem
+  directly — which is exactly what an integration test caught during
+  implementation.
+- **Presenting a code early does not consume a verification attempt.** An early
+  arrival is an impatient customer, not an attacker; burning an attempt would let
+  them lock themselves out of their own cash.
 
 ### A2 — Pickup code theft
 
@@ -228,18 +243,16 @@ refund. Every decision is audited with the analyst's identity.
 
 ## Gaps, ranked
 
-1. **No delay window between funding and collection.** The single highest-value
-   missing control against stolen-card cash-out.
-2. **Device fingerprinting is a spoofable placeholder.** Needs a real
+1. **Device fingerprinting is a spoofable placeholder.** Needs a real
    device-intelligence vendor.
-3. **Sanctions screening matches four strings.** Needs OFAC, UN, EU, UK HMT, and
+2. **Sanctions screening matches four strings.** Needs OFAC, UN, EU, UK HMT, and
    local lists with fuzzy matching, aliases, and transliteration.
-4. **No graph analysis** linking accounts by instrument, device, address, or
+3. **No graph analysis** linking accounts by instrument, device, address, or
    collection pattern.
-5. **No machine-learning scoring.** The rules are hand-weighted; there is no
+4. **No machine-learning scoring.** The rules are hand-weighted; there is no
    feedback loop from confirmed fraud.
-6. **No dual control** on large payouts.
-7. **No 3-D Secure enforcement policy.** The mock supports the challenge flow, but
+5. **No dual control** on large payouts.
+6. **No 3-D Secure enforcement policy.** The mock supports the challenge flow, but
    when to *require* it is unset.
-8. **No cross-institution intelligence sharing.**
-9. **No alerting on the audit stream.** Alerts are written and not watched.
+7. **No cross-institution intelligence sharing.**
+8. **No alerting on the audit stream.** Alerts are written and not watched.

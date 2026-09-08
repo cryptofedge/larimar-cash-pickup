@@ -28,6 +28,23 @@ const EnvSchema = z.object({
     .default('true')
     .transform((v) => v.toLowerCase() === 'true'),
 
+  /**
+   * Insecure demo shortcuts, each behind its own flag.
+   *
+   * Previously these piggybacked on DEMO_MODE, which meant disabling either one
+   * required abandoning demo mode entirely — so in practice neither ever got
+   * disabled. Separate flags make each a single, named, greppable decision, and
+   * `demoShortcutWarnings()` prints exactly which are live at startup.
+   */
+  DEMO_ALLOW_MFA_BYPASS: z
+    .string()
+    .default('true')
+    .transform((v) => v.toLowerCase() === 'true'),
+  DEMO_LOG_RESET_TOKENS: z
+    .string()
+    .default('true')
+    .transform((v) => v.toLowerCase() === 'true'),
+
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
 
   SESSION_SECRET: base64Secret('SESSION_SECRET'),
@@ -125,3 +142,44 @@ export const env: Env = loadEnv();
 
 export const isDemoMode = (): boolean => env.DEMO_MODE;
 export const isProduction = (): boolean => env.NODE_ENV === 'production';
+
+/**
+ * Insecure shortcuts currently active. Empty means none.
+ *
+ * Returned as data rather than logged directly so the health endpoint, the admin
+ * console, and startup can all surface the same list. An insecure default that
+ * nobody can see is the one that ships.
+ */
+export function demoShortcutWarnings(): string[] {
+  const active: string[] = [];
+
+  if (env.DEMO_MODE) {
+    active.push('DEMO_MODE: mock providers are installed; no real money moves.');
+  }
+  if (env.DEMO_ALLOW_MFA_BYPASS) {
+    active.push(
+      'DEMO_ALLOW_MFA_BYPASS: staff accounts sign in WITHOUT a second factor. Never enable in production.',
+    );
+  }
+  if (env.DEMO_LOG_RESET_TOKENS) {
+    active.push(
+      'DEMO_LOG_RESET_TOKENS: password reset tokens are printed to the console. Never enable in production.',
+    );
+  }
+
+  return active;
+}
+
+// Print the active shortcuts once, at import, so they cannot go unnoticed. In
+// production with everything disabled this prints nothing at all.
+{
+  const warnings = demoShortcutWarnings();
+  if (warnings.length > 0 && process.env.NODE_ENV !== 'test') {
+    // eslint-disable-next-line no-console
+    console.warn(
+      ['', '  ⚠  INSECURE DEMO SHORTCUTS ACTIVE', ...warnings.map((w) => `     - ${w}`), ''].join(
+        '\n',
+      ),
+    );
+  }
+}

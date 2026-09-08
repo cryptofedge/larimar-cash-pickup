@@ -220,6 +220,10 @@ export const es: Messages = {
     amountToCollect: 'Monto a recoger',
     expiresOn: 'Válido hasta {date}',
     bringId: 'Lleva un {documents} válido.',
+    collectableFrom: 'Disponible desde {date}',
+    securityHoldTitle: 'Retención de seguridad',
+    securityHoldBody:
+      'Esta transacción se retiene brevemente como medida de seguridad. Tu código funcionará normalmente cuando termine la retención — no necesitas hacer nada más.',
     securityWarning:
       'Trata este código como si fuera efectivo. Cualquiera con este código y una identificación que coincida podría recoger estos fondos.',
     findLocation: 'Buscar una ubicación de retiro',
@@ -314,6 +318,8 @@ export const es: Messages = {
     lockedCode: 'Ese código está bloqueado tras demasiados intentos fallidos.',
     alreadyRedeemed: 'Ese código ya fue utilizado.',
     notReady: 'Esa transacción no está lista para ser recogida.',
+    notYetCollectable: 'Esta transacción está en retención de seguridad y aún no puede pagarse.',
+    collectableAt: 'Disponible desde {date}',
     wrongLocation: 'Esa transacción no está asignada a tu ubicación.',
     attemptsRemaining: '{count} intentos restantes',
   },

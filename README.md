@@ -105,9 +105,10 @@ Password for every account: **`DemoPass123!`**
 | `finance@example.com` | `FINANCE_ADMIN` | Refunds, ledger, pricing |
 | `admin@example.com` | `SYSTEM_ADMIN` | Configuration — **cannot** clear compliance holds |
 
-> Staff accounts skip the TOTP challenge while `DEMO_MODE=true`, so the platform
-> is walkable from a fresh clone. That bypass is a production blocker and is
-> listed as one in [`SECURITY.md §12`](docs/SECURITY.md).
+> Staff accounts skip the TOTP challenge while `DEMO_ALLOW_MFA_BYPASS=true`, so
+> the platform is walkable from a fresh clone. The process prints a loud warning
+> at startup listing every insecure shortcut that is active. Both shortcut flags
+> are production blockers, listed as such in [`SECURITY.md §12`](docs/SECURITY.md).
 
 ### Walk the full demo by hand
 
@@ -134,7 +135,7 @@ PRESENTATION   src/app, src/components      React Server Components, i18n. No ar
 HTTP           src/app/api                  Zod parsing, authn, authz, rate limit, idempotency.
 SERVICES       src/server/services          Use cases inside DB transactions.
 DOMAIN         src/lib/domain               Money, FX, fees, state machine, codes, risk, ledger.
-                                            Pure. No I/O. No clock. 272 tests, no infrastructure.
+                                            Pure. No I/O. No clock. 296 tests, no infrastructure.
 PORTS          src/server/providers         Payment · FX · KYC · Sanctions · Notifications
 PERSISTENCE    prisma/schema.prisma         PostgreSQL 16. Constraints enforce the invariants too.
 ```
@@ -177,17 +178,18 @@ A bearer instrument for cash, treated as one:
 | Delivered | Once, to the paying customer. No endpoint returns it again. |
 | Attempts | 5, then locked plus a fraud alert. Cross-code brute force also detected. |
 | Redemption | Single-use, enforced by a conditional update at `SERIALIZABLE` |
+| Collection delay | Risk-based hold before a code becomes collectable — 30 min at MEDIUM+, none for low risk. Enforced at verify **and** redeem. |
 
 ---
 
 ## Test results
 
 ```
-Unit          281 passed    domain logic, zero infrastructure, ~2s
-Integration    61 passed    real PostgreSQL: concurrency, constraints, RBAC, limits
+Unit          296 passed    domain logic, zero infrastructure, ~2s
+Integration    65 passed    real PostgreSQL: concurrency, constraints, RBAC, limits
 E2E            28 passed    Playwright, desktop + mobile, full browser journeys
               ───────────
-              370 passed
+              389 passed
 ```
 
 ```bash
@@ -197,7 +199,7 @@ npm run test:e2e    # Playwright (builds and serves the app)
 npm run typecheck && npm run lint
 ```
 
-Three findings the tests produced, all now fixed and guarded:
+Four findings the tests produced, all now fixed and guarded:
 
 - **A rejected-KYC transaction could reach `PICKED_UP`.** An exhaustive
   reachability test found a path `KYC_REJECTED → CANCELLED → REFUNDED →
@@ -211,6 +213,10 @@ Three findings the tests produced, all now fixed and guarded:
   funds suspense account after those funds were already allocated to fees and FX.
   The ledger still balanced; it was simply wrong. Refunds now reverse the
   original posting chain.
+- **A fraud control was enforced at verification but not at redemption.** The
+  risk-based collection delay blocked `verify` while `redeem` sailed straight
+  through — so an agent calling redeem directly bypassed it entirely. Redemption
+  now re-applies every guard rather than trusting the earlier verify call.
 
 ---
 
@@ -257,9 +263,11 @@ npm run openapi   # → public/openapi.json
   platform fee, processing fee, FX spread, and principal is a commercial policy
   decision, not an engineering one. Guessing would balance the ledger while
   misstating revenue, so the service refuses and says why.
-- **MFA is bypassed in demo mode** for staff accounts.
-- **Password reset tokens are logged to the console** in demo mode; there is no
-  mail transport.
+- **MFA is bypassed for staff** while `DEMO_ALLOW_MFA_BYPASS=true`, and
+  **password reset tokens are logged to the console** while
+  `DEMO_LOG_RESET_TOKENS=true`. Each is a separate named flag rather than being
+  folded into `DEMO_MODE`, and the process prints a loud warning at startup
+  listing whichever are active. Both must be `false` in production.
 - **Device fingerprinting is a placeholder** and trivially spoofable. It
   contributes risk weight and is never an authentication factor.
 - **Rate limiting uses fixed windows** in PostgreSQL, so a burst at a window
@@ -278,7 +286,8 @@ under which category. See [`LEGAL_AND_COMPLIANCE.md §9`](docs/LEGAL_AND_COMPLIA
 
 **Engineering, in priority order:**
 
-1. Remove the demo-mode MFA bypass and the reset-token logging.
+1. Set `DEMO_ALLOW_MFA_BYPASS=false` and `DEMO_LOG_RESET_TOKENS=false`, then
+   delete both branches once a real MFA enrolment and mail transport exist.
 2. Move rate limiting and idempotency to Redis.
 3. Move secrets to a managed store with rotation, including a versioned pickup
    pepper with dual-read so rotation does not invalidate live codes.

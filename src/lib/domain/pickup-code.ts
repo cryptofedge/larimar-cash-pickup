@@ -220,11 +220,55 @@ export interface PickupCodeState {
   readonly attemptCount: number;
   readonly maxAttempts: number;
   readonly expiresAt: Date;
+  /** When a risk-based delay applies. NULL means immediately collectable. */
+  readonly collectableFrom?: Date | null;
 }
+
+export type CodeCheckFailureCode =
+  | 'PICKUP_CODE_EXPIRED'
+  | 'PICKUP_CODE_LOCKED'
+  | 'PICKUP_CODE_ALREADY_REDEEMED'
+  | 'PICKUP_CODE_ATTEMPTS_EXCEEDED'
+  | 'PICKUP_CODE_NOT_YET_COLLECTABLE'
+  | 'PICKUP_CODE_INVALID';
 
 export type CodeCheckResult =
   | { readonly ok: true }
-  | { readonly ok: false; readonly code: 'PICKUP_CODE_EXPIRED' | 'PICKUP_CODE_LOCKED' | 'PICKUP_CODE_ALREADY_REDEEMED' | 'PICKUP_CODE_ATTEMPTS_EXCEEDED' | 'PICKUP_CODE_INVALID'; readonly reason: string };
+  | {
+      readonly ok: false;
+      readonly code: CodeCheckFailureCode;
+      readonly reason: string;
+      /** Present only for NOT_YET_COLLECTABLE. */
+      readonly collectableFrom?: Date;
+    };
+
+/**
+ * Whether presenting a code in this state should consume a verification attempt.
+ *
+ * Arriving before the delay window opens is a legitimate customer being early,
+ * not an attacker guessing. Burning an attempt for it would let an impatient
+ * customer lock themselves out of their own cash.
+ */
+export function shouldBurnAttempt(code: CodeCheckFailureCode): boolean {
+  return code !== 'PICKUP_CODE_NOT_YET_COLLECTABLE';
+}
+
+/**
+ * When a code issued now becomes collectable, given the policy.
+ *
+ * Returns null when no delay applies, which keeps the common path free of a
+ * timestamp that would otherwise need checking everywhere.
+ */
+export function collectableFromFor(input: {
+  issuedAt: Date;
+  riskScore: number;
+  delayMinutes: number;
+  riskThreshold: number;
+}): Date | null {
+  if (input.delayMinutes <= 0) return null;
+  if (input.riskScore < input.riskThreshold) return null;
+  return new Date(input.issuedAt.getTime() + input.delayMinutes * 60_000);
+}
 
 /**
  * Whether a code may be presented for verification right now.
@@ -248,6 +292,17 @@ export function checkCodeUsable(state: PickupCodeState, now: Date): CodeCheckRes
   }
   if (state.attemptCount >= state.maxAttempts) {
     return { ok: false, code: 'PICKUP_CODE_ATTEMPTS_EXCEEDED', reason: 'Maximum verification attempts reached' };
+  }
+  // Checked last, and deliberately after the attempt cap: a locked or exhausted
+  // code is a harder failure and should report as such rather than telling the
+  // holder to come back later for cash they can no longer collect.
+  if (state.collectableFrom && now.getTime() < state.collectableFrom.getTime()) {
+    return {
+      ok: false,
+      code: 'PICKUP_CODE_NOT_YET_COLLECTABLE',
+      reason: 'This transaction is in its security hold period and cannot be collected yet',
+      collectableFrom: state.collectableFrom,
+    };
   }
   return { ok: true };
 }

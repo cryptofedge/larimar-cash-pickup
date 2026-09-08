@@ -18,6 +18,7 @@ export const GET = defineRoute({ permission: 'pickup.code.view.own' }, async ({ 
     status: status.status,
     prefix: status.prefix,
     expiresAt: status.expiresAt,
+    collectableFrom: status.collectableFrom,
     attemptsRemaining: status.maxAttempts - status.attemptCount,
     redeemedAt: status.redeemedAt,
   });

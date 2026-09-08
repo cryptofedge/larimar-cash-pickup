@@ -916,6 +916,8 @@ model PickupCode {
   maxAttempts    Int              @default(5) @map("max_attempts")
   lockedAt       DateTime?        @map("locked_at")
 
+  /// Set when the risk policy imposes a delay. NULL means immediately collectable.
+  collectableFrom DateTime?       @map("collectable_from")
   expiresAt      DateTime         @map("expires_at")
   redeemedAt     DateTime?        @map("redeemed_at")
   redeemedBy     String?          @map("redeemed_by") @db.Uuid
@@ -1138,6 +1140,18 @@ model RiskPolicy {
 
   velocityWindowHours   Int      @default(24) @map("velocity_window_hours")
   velocityMaxCount      Int      @default(5) @map("velocity_max_count")
+
+  /// Minutes a funded transaction must wait before its code becomes collectable.
+  ///
+  /// The strongest control against stolen-card cash-out: most such fraud is
+  /// time-sensitive, and a delay gives the issuer a window to decline before the
+  /// pesos are irrecoverable. It also degrades the "arrange cash before you need
+  /// it" promise, so it is applied ONLY above the risk threshold below rather
+  /// than to every customer.
+  collectionDelayMinutes Int     @default(0) @map("collection_delay_minutes")
+  /// Risk score at or above which the delay applies. Below it, collection is
+  /// immediate.
+  collectionDelayRiskThreshold Int @default(30) @map("collection_delay_risk_threshold")
 
   kycRequiredAboveMinor BigInt   @map("kyc_required_above_minor")
   reviewScoreThreshold  Int      @default(60) @map("review_score_threshold")

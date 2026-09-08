@@ -261,10 +261,9 @@ export async function login(input: LoginInput): Promise<LoginResult> {
 
   if (mfaNeeded) {
     if (!input.totpCode) {
-      // In DEMO_MODE staff accounts are usable without an authenticator app, so
-      // the whole platform is walkable from a fresh clone. Production must not
-      // take this branch — see README "Known limitations".
-      if (env.DEMO_MODE) {
+      // A named flag rather than DEMO_MODE, so it can be switched off without
+      // abandoning demo mode. Its state is printed at startup.
+      if (env.DEMO_ALLOW_MFA_BYPASS) {
         mfaSatisfied = true;
       } else {
         return { ok: false, code: 'MFA_REQUIRED' };
@@ -283,7 +282,7 @@ export async function login(input: LoginInput): Promise<LoginResult> {
         });
         return { ok: false, code: 'MFA_INVALID' };
       }
-    } else if (env.DEMO_MODE) {
+    } else if (env.DEMO_ALLOW_MFA_BYPASS) {
       mfaSatisfied = true;
     } else {
       return { ok: false, code: 'MFA_REQUIRED' };
@@ -429,9 +428,9 @@ export async function requestPasswordReset(input: {
     );
   });
 
-  // In DEMO_MODE the token is logged so the flow is walkable without a mail
-  // server. This line must never exist in a production build.
-  if (env.DEMO_MODE) {
+  // Logged so the reset flow is walkable without a mail server. Gated on its
+  // own flag and announced at startup; must be off in production.
+  if (env.DEMO_LOG_RESET_TOKENS) {
     console.log(`[demo] password reset token for ${user.email}: ${token}`);
   }
 }
