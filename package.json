@@ -2,6 +2,7 @@
   "name": "larimar",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "Larimar - cash pickup platform for travelers in the Dominican Republic (DEMO / non-production)",
   "engines": {
     "node": ">=20.0.0"

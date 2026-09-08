@@ -372,6 +372,24 @@ Deep Navy `#0A1F33` · Larimar `#1C93B8` · Pale Larimar `#CFE9F1` · Sand `#E8B
 
 ---
 
+## License
+
+[MIT](./LICENSE) © 2026 cryptofedge.
+
+The grant covers **the source code**. It is not a transfer of anything this
+project does not have: there is no licence, registration, or authorisation to
+operate as a money transmitter, payment institution, or foreign-exchange dealer,
+and none can be conveyed by a software licence.
+
+If you deploy this, you are the operator. The demo safeguards — the
+non-dismissible banner, `isDemo` on every record and API response, `isDemoRate`
+on all pricing, and the `DEMO_MODE` boot interlock — exist so that a running
+instance cannot quietly present itself as a real service. Removing them and
+taking real money from real people is your legal exposure, in your jurisdiction,
+and the MIT warranty disclaimer above is not a defence against it.
+
+---
+
 <div align="center">
 
 **Larimar is a demonstration. No real money moves. All locations are fictional.**
