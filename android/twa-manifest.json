@@ -1,0 +1,70 @@
+{
+  "$comment": [
+    "Bubblewrap configuration for the Larimar Trusted Web Activity.",
+    "",
+    "This packages the deployed PWA as an Android app for Google Play. It does NOT",
+    "make the app publishable: Google Play's Financial Services policy applies to",
+    "anything that presents as money transfer or remittance, and this build is an",
+    "unlicensed demonstration. Read docs/MOBILE_AND_PLAY_STORE.md before doing",
+    "anything with this file.",
+    "",
+    "Replace `host` with your real deployed domain before generating. Bubblewrap",
+    "fetches the manifest and icons from that host at build time."
+  ],
+
+  "packageId": "com.example.larimar",
+  "host": "larimar.example.com",
+  "name": "Larimar — Cash Pickup (Demo)",
+  "launcherName": "Larimar",
+  "display": "standalone",
+  "orientation": "portrait",
+  "themeColor": "#0A1F33",
+  "themeColorDark": "#0A1F33",
+  "navigationColor": "#0A1F33",
+  "navigationColorDark": "#0A1F33",
+  "navigationDividerColor": "#0A1F33",
+  "navigationDividerColorDark": "#0A1F33",
+  "backgroundColor": "#0A1F33",
+
+  "startUrl": "/dashboard",
+  "webManifestUrl": "https://larimar.example.com/manifest.webmanifest",
+  "iconUrl": "https://larimar.example.com/icons/icon-512.png",
+  "maskableIconUrl": "https://larimar.example.com/icons/icon-maskable-512.png",
+
+  "splashScreenFadeOutDuration": 300,
+  "enableNotifications": false,
+  "isChromeOSOnly": false,
+  "isMetaQuest": false,
+  "fallbackType": "customtabs",
+
+  "appVersionName": "0.1.0",
+  "appVersionCode": 1,
+  "minSdkVersion": 23,
+
+  "shortcuts": [
+    {
+      "name": "New cash pickup",
+      "shortName": "New pickup",
+      "url": "/new",
+      "chosenIconUrl": "https://larimar.example.com/icons/icon-192.png"
+    },
+    {
+      "name": "Find a pickup location",
+      "shortName": "Locations",
+      "url": "/locations",
+      "chosenIconUrl": "https://larimar.example.com/icons/icon-192.png"
+    }
+  ],
+
+  "signingKey": {
+    "$comment": "Never commit a keystore or its passwords. Generate locally, back it up, and let Play App Signing hold the release key.",
+    "path": "./android.keystore",
+    "alias": "larimar"
+  },
+
+  "features": {},
+  "alphaDependencies": { "enabled": false },
+  "enableSiteSettingsShortcut": true,
+  "fullScopeUrl": "https://larimar.example.com/",
+  "generatorApp": "bubblewrap-cli"
+}

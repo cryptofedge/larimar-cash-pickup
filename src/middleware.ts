@@ -39,6 +39,9 @@ export function middleware(request: NextRequest): NextResponse {
     "img-src 'self' data: blob:",
     "font-src 'self' data:",
     "connect-src 'self'",
+    // The service worker is same-origin and caches no personal data; see public/sw.js.
+    "worker-src 'self'",
+    "manifest-src 'self'",
     "form-action 'self'",
     "frame-ancestors 'none'",
     "base-uri 'self'",
@@ -77,12 +80,21 @@ export function middleware(request: NextRequest): NextResponse {
 export const config = {
   matcher: [
     /*
-     * Everything except Next's own static output and the favicon. Static assets
-     * are immutable and hashed; running middleware over them would add latency
-     * and generate pointless nonces.
+     * Everything except static assets.
+     *
+     * Next's own build output is immutable and hashed, so running middleware
+     * over it only adds latency and generates pointless nonces.
+     *
+     * `sw.js` must be excluded for a different and less obvious reason: the CSP
+     * on a service worker script's own response governs the worker's execution
+     * context. Serving it with `script-src 'nonce-… ' 'strict-dynamic'` blocks
+     * the worker outright — the script carries no nonce — and the browser
+     * reports only "an unknown error occurred when fetching the script", which
+     * is exactly as diagnosable as it sounds.
      */
     {
-      source: '/((?!_next/static|_next/image|favicon.ico).*)',
+      source:
+        '/((?!_next/static|_next/image|favicon.ico|sw\\.js|offline\\.html|icons/).*)',
       missing: [
         { type: 'header', key: 'next-router-prefetch' },
         { type: 'header', key: 'purpose', value: 'prefetch' },

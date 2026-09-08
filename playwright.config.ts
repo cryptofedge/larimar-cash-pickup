@@ -24,6 +24,9 @@ export default defineConfig({
 
   use: {
     baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:3000',
+    // The PWA suite asserts what the service worker caches, so workers must
+    // be allowed rather than Playwright's default of blocking them.
+    serviceWorkers: 'allow',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'off',

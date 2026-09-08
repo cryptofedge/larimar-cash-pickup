@@ -1,0 +1,14 @@
+# Signing material must never be committed. Losing the upload key means you can
+# never update the app; leaking it means someone else can.
+*.keystore
+*.jks
+keystore.properties
+android.keystore
+
+# Bubblewrap build output
+/app/
+/build/
+*.aab
+*.apk
+/.gradle/
+/local.properties

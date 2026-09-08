@@ -12,5 +12,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     await logout(principal.sessionId, principal.userId, req.headers.get('x-forwarded-for'));
   }
   await clearSessionCookie();
-  return NextResponse.redirect(new URL('/', env.APP_URL), { status: 303 });
+  // The flag tells the client to purge the service worker cache. Nothing
+  // personal is cached by design, so this is belt and braces on a shared device.
+  return NextResponse.redirect(new URL('/?signedout=1', env.APP_URL), { status: 303 });
 }

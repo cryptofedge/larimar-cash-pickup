@@ -27,7 +27,10 @@
     "db:seed": "tsx --env-file=.env prisma/seed.ts",
     "db:studio": "prisma studio",
     "demo": "tsx --env-file=.env scripts/demo-flow.ts",
-    "openapi": "tsx scripts/generate-openapi.ts"
+    "openapi": "tsx scripts/generate-openapi.ts",
+    "icons": "tsx scripts/generate-icons.ts",
+    "twa:init": "npx --yes @bubblewrap/cli init --manifest android/twa-manifest.json --directory android",
+    "twa:build": "npx --yes @bubblewrap/cli build --directory android"
   },
   "prisma": {
     "seed": "tsx --env-file=.env prisma/seed.ts"

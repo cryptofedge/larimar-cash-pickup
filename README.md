@@ -187,9 +187,9 @@ A bearer instrument for cash, treated as one:
 ```
 Unit          329 passed    domain logic, zero infrastructure, ~2s
 Integration    81 passed    real PostgreSQL: concurrency, constraints, RBAC, limits
-E2E            28 passed    Playwright, desktop + mobile, full browser journeys
+E2E            44 passed    Playwright, desktop + mobile, incl. PWA cache hygiene
               ───────────
-              438 passed
+              454 passed
 ```
 
 ```bash
@@ -239,6 +239,7 @@ Five findings the tests produced, all now fixed and guarded:
 | [`DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Local, Docker, and production readiness |
 | [`FRAUD_AND_RISK.md`](docs/FRAUD_AND_RISK.md) | Attack catalogue and the control for each |
 | [`PARTNER_INTEGRATION.md`](docs/PARTNER_INTEGRATION.md) | How a payout institution integrates |
+| [`MOBILE_AND_PLAY_STORE.md`](docs/MOBILE_AND_PLAY_STORE.md) | PWA, Android packaging, and the Play policy gate |
 
 OpenAPI 3.1 is generated from the same Zod schemas the API validates with:
 
@@ -283,6 +284,15 @@ npm run openapi   # → public/openapi.json
   behind "mark paid".
 - **Single region, no disaster-recovery topology.**
 - **Not penetration tested. No PCI DSS assessment.**
+- **The Android app cannot be published.** It builds and installs, but Google
+  Play's Financial Services policy applies to anything presenting as money
+  transfer, and no licence exists to declare. Internal and closed testing tracks
+  are legitimate; a production release is not. See
+  [`MOBILE_AND_PLAY_STORE.md`](docs/MOBILE_AND_PLAY_STORE.md).
+- **No account-deletion flow**, which Play requires before any release.
+- **Offline support is deliberately minimal** — the service worker caches no API
+  response and no HTML page, because a cached pickup code would be a bearer
+  credential for cash sitting in durable client storage.
 
 ---
 
